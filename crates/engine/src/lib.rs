@@ -152,6 +152,8 @@ impl DocState {
 pub struct Prefs {
     pub show_hidden_characters: bool,
     pub typographers_quotes: bool,
+    /// Preferences › Type: Selection-tool double-clicks enter text editing.
+    pub double_click_text_edit: bool,
     /// Polygon Settings (double-click the Polygon tool): number of sides, star inset (0–1).
     pub polygon_sides: u32,
     pub star_inset: f64,
@@ -221,6 +223,7 @@ impl Default for Prefs {
         Prefs {
             show_hidden_characters: false,
             typographers_quotes: true,
+            double_click_text_edit: true,
             polygon_sides: 6,
             star_inset: 0.0,
             scale_strokes: true,

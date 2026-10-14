@@ -832,6 +832,7 @@ fn preferences(app: &crate::DesignApp, ui: &mut egui::Ui, d: &mut Dialog, max_he
                 "type" => {
                     crate::rtl::label(ui, egui::RichText::new(crate::i18n::tr(&app.ui.language, "Type Options")).font(semibold(12.0)));
                     check(ui, d, "typographersQuotes", crate::i18n::tr(&app.ui.language, "Use Typographer's Quotes"));
+                    check(ui, d, "doubleClickTextEdit", crate::i18n::tr(&app.ui.language, "Double-click a frame to edit text"));
                     check(ui, d, "showFontNamesInEnglish", crate::i18n::tr(&app.ui.language, "Show Font Names in English"));
                     ui.add_space(6.0);
                     ui.label(crate::rtl::widget(
@@ -1989,6 +1990,7 @@ pub fn confirm(app: &mut DesignApp) -> Result<Value, String> {
             app.run(
                 "prefs.set",
                 json!({"scaleStrokes": d.b("scaleStrokes"), "dimensionsIncludeStroke": d.b("dimensionsIncludeStroke"), "transformationsAreTotals": d.b("transformationsAreTotals"), "absolutePageNumbers": d.b("absolutePageNumbers"), "highlightHj": d.b("highlightHj"), "highlightKeeps": d.b("highlightKeeps"), "highlightCustomTracking": d.b("highlightCustomTracking"), "highlightSubstitutedFonts": d.b("highlightSubstitutedFonts"), "richBlackOutput": d.b("richBlackOutput"), "typographersQuotes": d.b("typographersQuotes"), "showFontNamesInEnglish": d.b("showFontNamesInEnglish"), "smartTextReflow": d.b("smartTextReflow"),
+                    "doubleClickTextEdit": d.b("doubleClickTextEdit"),
                     "autocorrect": d.b("autocorrect"), "showAddedText": d.b("showAddedText"), "showNoteAnchors": d.b("showNoteAnchors"),
                     "recoveryMinutes": d.n("recoveryMinutes").unwrap_or(0.5),
                     "autocorrectList": d.s("autocorrectText").lines().filter_map(|l| {
@@ -3857,6 +3859,33 @@ mod tests {
         for expected in ["Document Recovery Data", "Save recovery data every:", "OK", "Cancel"] {
             visible_label(&labels, screen, expected);
         }
+    }
+
+    #[test]
+    fn italian_double_click_checkbox_updates_saved_engine_preferences() {
+        let mut app = DesignApp::new(designcraft_engine::Session::new(), crate::Services::default());
+        app.ui.language = "it".into();
+        app.run("app.preferences", json!({})).unwrap();
+        app.ui.dialog.as_mut().unwrap().fields.insert("section".into(), json!("type"));
+        assert!(app.ui.dialog.as_ref().unwrap().b("doubleClickTextEdit"));
+        let ctx = dialog_context("it");
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0));
+        for _ in 0..3 {
+            dialog_frame(&mut app, &ctx, screen, vec![]);
+        }
+        let labels = dialog_frame(&mut app, &ctx, screen, vec![]);
+        let checkbox = visible_label(&labels, screen, "Doppio clic sulla cornice per modificare il testo");
+        click_dialog(&mut app, &ctx, screen, checkbox.center());
+        assert!(!app.ui.dialog.as_ref().unwrap().b("doubleClickTextEdit"));
+        let labels = dialog_frame(&mut app, &ctx, screen, vec![]);
+        let ok = visible_label(&labels, screen, crate::i18n::tr("it", "OK"));
+        click_dialog(&mut app, &ctx, screen, ok.center());
+        assert!(app.ui.dialog.is_none());
+        assert!(!app.session.prefs.double_click_text_edit);
+        let saved = serde_json::to_vec(&app.session.prefs).unwrap();
+        let loaded: designcraft_engine::Prefs = serde_json::from_slice(&saved).unwrap();
+        assert!(!loaded.double_click_text_edit);
+        assert_eq!(crate::i18n::tr("de", "Double-click a frame to edit text"), "Double-click a frame to edit text");
     }
 
     #[test]

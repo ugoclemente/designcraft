@@ -801,11 +801,12 @@ fn draw_selection(app: &DesignApp, painter: &egui::Painter, xf: &Xf, doc: &Docum
         for poly in path_screen(it, xf, a) {
             painter.add(egui::Shape::line(poly, Stroke::new(1.0, color)));
         }
-        if sel.items.len() == 1 && sel.text.is_none() {
+        if sel.items.len() == 1 && sel.text.is_none() && !sel.content {
             // InDesign draws a 1 pt bounding box around the selection.
             painter.rect_stroke(xf.rect(a.transform_rect_bbox(it.bounds())), 0.0, Stroke::new(1.0, color), StrokeKind::Middle);
         }
-        let b = xf.rect(a.transform_rect_bbox(it.bounds()));
+        let bounds = if sel.content { it.graphic_bounds().unwrap_or_else(|| it.bounds()) } else { it.bounds() };
+        let b = xf.rect(a.transform_rect_bbox(bounds));
         union = Some(union.map_or(b, |u| u.union(b)));
         // Text frame ports.
         if let Content::Text(tf) = &it.content {
@@ -816,6 +817,7 @@ fn draw_selection(app: &DesignApp, painter: &egui::Painter, xf: &Xf, doc: &Docum
         {
             let gb = xf.rect((a * it.xf).transform_rect_bbox(g.xf.transform_rect_bbox(DRect::new(0.0, 0.0, g.size.0, g.size.1))));
             painter.rect_stroke(gb, 0.0, Stroke::new(1.0, Color32::from_rgb(196, 111, 43)), StrokeKind::Middle);
+            color = Color32::from_rgb(196, 111, 43);
         }
     }
     let direct = matches!(app.session.tool_id(), "directSelection" | "pen" | "addAnchor" | "deleteAnchor" | "convertDirection");
@@ -852,6 +854,7 @@ fn draw_selection(app: &DesignApp, painter: &egui::Painter, xf: &Xf, doc: &Docum
         // Centre point and the live-corner widget.
         painter.rect_filled(Rect::from_center_size(u.center(), vec2(3.5, 3.5)), 0.0, color);
         if sel.items.len() == 1
+            && !sel.content
             && doc.item(sel.items[0]).is_some_and(|i| matches!(i.shape, designcraft_doc::Shape::Rectangle) && i.children().is_empty())
         {
             let lc = Rect::from_center_size(pos2(u.max.x, u.min.y + 11.5), vec2(6.0, 6.0));
@@ -864,7 +867,7 @@ fn draw_selection(app: &DesignApp, painter: &egui::Painter, xf: &Xf, doc: &Docum
             painter.rect_stroke(r, 0.0, Stroke::new(hair(painter), color), StrokeKind::Inside);
         }
         // Content grabber on graphic frames.
-        if sel.items.len() == 1 && doc.item(sel.items[0]).is_some_and(|i| matches!(i.content, Content::Graphic(_))) {
+        if !sel.content && sel.items.len() == 1 && doc.item(sel.items[0]).is_some_and(|i| matches!(i.content, Content::Graphic(_))) {
             painter.circle_stroke(u.center(), 8.0, Stroke::new(1.5, Color32::from_white_alpha(170)));
             painter.circle_stroke(u.center(), 4.0, Stroke::new(1.5, Color32::from_white_alpha(170)));
         }
@@ -1383,20 +1386,13 @@ fn handle_input(app: &mut DesignApp, ui: &mut egui::Ui, resp: &egui::Response, r
     let mut events: Vec<PointerEvent> = Vec::new();
     let down_id = egui::Id::new(("canvas_pointer_down", app.pane));
     let mut down: bool = ui.data(|d| d.get_temp(down_id)).unwrap_or(false);
-    let (pressed, released, origin, latest, dbl) = ui.input(|i| {
-        (
-            i.pointer.primary_pressed(),
-            i.pointer.primary_released(),
-            i.pointer.press_origin(),
-            i.pointer.latest_pos(),
-            i.pointer.button_double_clicked(egui::PointerButton::Primary),
-        )
-    });
+    let (pressed, released, origin, latest) =
+        ui.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_released(), i.pointer.press_origin(), i.pointer.latest_pos()));
     if pressed
         && !space
         && let Some(o) = origin.filter(|o| (if xf.rot == 0 { rect.contains(*o) } else { resp.rect.contains(*o) }) && resp.hovered())
     {
-        events.push(PointerEvent { kind: if dbl { PointerKind::DoubleClick } else { PointerKind::Down }, pos: pos(o), mods: m });
+        events.push(PointerEvent { kind: PointerKind::Down, pos: pos(o), mods: m });
         down = true;
     }
     if down
@@ -1433,6 +1429,14 @@ fn handle_input(app: &mut DesignApp, ui: &mut egui::Ui, resp: &egui::Response, r
     } else if !down && let Some(p) = resp.hover_pos() {
         events.push(PointerEvent { kind: PointerKind::Move, pos: pos(p), mods: m });
     }
+    // egui recognizes clicks on release. Finish the selection gesture before switching
+    // tools. The response also checks canvas ownership, including clicks shorter than a frame.
+    if !space
+        && resp.double_clicked_by(egui::PointerButton::Primary)
+        && let Some(p) = resp.interact_pointer_pos()
+    {
+        events.push(PointerEvent { kind: PointerKind::DoubleClick, pos: pos(p), mods: m });
+    }
     ui.data_mut(|d| d.insert_temp(down_id, down));
     for e in events {
         if let Err(err) = app.session.pointer(&e, vi) {
@@ -1440,6 +1444,8 @@ fn handle_input(app: &mut DesignApp, ui: &mut egui::Ui, resp: &egui::Response, r
         }
     }
     app.after_engine();
+    // A pointer event can enter or leave text editing in this same frame.
+    let wants_text = app.session.wants_text();
     if resp.clicked() || resp.drag_started() {
         resp.request_focus();
     }
@@ -1746,7 +1752,7 @@ mod tests {
     use super::*;
 
     fn harness(app: DesignApp) -> Harness<'static, DesignApp> {
-        let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
             |ui, app: &mut DesignApp| {
                 let ctx = ui.ctx().clone();
                 app.logic(&ctx);
@@ -1770,6 +1776,99 @@ mod tests {
     fn units(h: &Harness<'_, DesignApp>) -> (Unit, Unit) {
         let s = &h.state().session.doc().unwrap().doc.settings;
         (s.horizontal_units, s.vertical_units)
+    }
+
+    fn primary_click(h: &mut Harness<'_, DesignApp>, p: Pos2, text_on_release: bool) {
+        h.hover_at(p);
+        h.step();
+        for pressed in [true, false] {
+            h.input_mut().events.push(egui::Event::PointerButton {
+                pos: p,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            });
+            if !pressed && text_on_release {
+                h.input_mut().events.push(egui::Event::Text("Z".into()));
+            }
+            h.step();
+        }
+    }
+
+    #[test]
+    fn double_click_release_selects_image_content() {
+        for (enabled, grouped) in [(true, false), (false, false), (true, true), (false, true)] {
+            let mut app = DesignApp::new(designcraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({})).unwrap();
+            let image = app.run("file.place", json!({"base64": "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMDAiIGhlaWdodD0iMTAwIj48cmVjdCB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgZmlsbD0icmVkIi8+PC9zdmc+", "name": "synthetic.svg", "x": 72, "y": 72, "width": 200})).unwrap();
+            if grouped {
+                let other = app.run("frame.create", json!({"rect": [300, 72, 350, 122]})).unwrap();
+                app.run("object.group", json!({"ids": [image["id"], other["id"]]})).unwrap();
+            }
+            app.run("prefs.set", json!({"doubleClickTextEdit": enabled})).unwrap();
+            app.session.set_tool("selection");
+            app.run("edit.deselectAll", json!({})).unwrap();
+            let mut h = harness(app);
+            let app = h.state();
+            let xf = Xf::new(app.canvas_rect.unwrap(), app.view().unwrap());
+            let p = xf.to_screen(app.session.layout().xf(SpreadRef::Doc(0)) * Point::new(100.0, 100.0));
+            primary_click(&mut h, p, false);
+            assert!(!h.state().session.doc().unwrap().selection.content);
+            primary_click(&mut h, p, false);
+            let st = h.state().session.doc().unwrap();
+            assert_eq!(st.selection.items, vec![designcraft_doc::ItemId(image["id"].as_u64().unwrap())]);
+            assert!(st.selection.content);
+            assert!(st.selection.text.is_none());
+            assert_eq!(h.state().session.tool_id(), "selection");
+            let id = designcraft_doc::ItemId(image["id"].as_u64().unwrap());
+            let before = h.state().session.doc().unwrap().doc.item(id).unwrap().clone();
+            // Drag the selected content with actual UI mouse events. Disable snapping for an
+            // exact delta and verify that the crop frame stays fixed.
+            let modifiers = egui::Modifiers { command: true, ..Default::default() };
+            h.input_mut().events.push(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers });
+            h.step();
+            let end = p + vec2(25.0, 15.0);
+            h.input_mut().events.push(egui::Event::PointerMoved(end));
+            h.step();
+            h.input_mut().events.push(egui::Event::PointerButton { pos: end, button: egui::PointerButton::Primary, pressed: false, modifiers });
+            h.step();
+            let after = h.state().session.doc().unwrap().doc.item(id).unwrap();
+            assert_eq!(after.path, before.path);
+            assert_eq!(after.xf, before.xf, "dragging selected image content moved the frame");
+            assert_ne!(after.graphic().unwrap().xf, before.graphic().unwrap().xf);
+        }
+    }
+
+    #[test]
+    fn double_click_release_enters_text_and_accepts_immediate_input() {
+        for (content, text, enabled) in [("text", "hello world", true), ("text", "", true), ("graphic", "", true), ("text", "hello", false)] {
+            let mut app = DesignApp::new(designcraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({})).unwrap();
+            let frame = app.run("frame.create", json!({"rect": [72, 72, 372, 272], "content": content, "text": text})).unwrap();
+            app.run("prefs.set", json!({"doubleClickTextEdit": enabled})).unwrap();
+            app.session.set_tool("selection");
+            app.run("edit.deselectAll", json!({})).unwrap();
+            let mut h = harness(app);
+            let app = h.state();
+            let xf = Xf::new(app.canvas_rect.unwrap(), app.view().unwrap());
+            let p = xf.to_screen(app.session.layout().xf(SpreadRef::Doc(0)) * Point::new(100.0, 100.0));
+            primary_click(&mut h, p, false);
+            assert_eq!(h.state().session.tool_id(), "selection");
+            assert_eq!(h.state().session.doc().unwrap().selection.items, vec![designcraft_doc::ItemId(frame["id"].as_u64().unwrap())]);
+            assert!(h.state().session.doc().unwrap().selection.text.is_none());
+            primary_click(&mut h, p, content == "text" && enabled);
+            if content == "text" && enabled {
+                assert_eq!(h.state().session.tool_id(), "type");
+                let st = h.state().session.doc().unwrap();
+                let caret = st.selection.text.unwrap();
+                assert_eq!(caret.anchor, caret.focus);
+                assert_eq!(st.doc.story(caret.story).unwrap().text.len(), text.len() + 1);
+                assert!(st.doc.story(caret.story).unwrap().text.contains('Z'));
+            } else {
+                assert_eq!(h.state().session.tool_id(), "selection");
+                assert!(h.state().session.doc().unwrap().selection.text.is_none());
+            }
+        }
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! Original Italian interface translations, written from the English source
 //! using ordinary Italian desktop-publishing vocabulary.
 pub(super) const TABLE: &[(&str, &str)] = &[
+    ("Double-click a frame to edit text", "Doppio clic sulla cornice per modificare il testo"),
     ("File", "File"),
     ("Edit", "Modifica"),
     ("Layout", "Layout"),

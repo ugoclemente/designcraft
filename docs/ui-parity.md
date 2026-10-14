@@ -1,6 +1,6 @@
 # UI and interaction parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (stage re-normalized to pre-alpha by the core-workflow gate; earlier today: major, first version) · **Target:** Adobe InDesign 2026 (21.6, Medium Dark, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (text-frame double-click editing verified on Windows) · **Target:** Adobe InDesign 2026 (21.6, Medium Dark, macOS)
 
 Tools, handles, snapping, nudging, modifiers, shortcuts, panels, menus, context menus and feel,
 against InDesign 2026. The look was measured from the running app
@@ -36,6 +36,8 @@ basics of editing fail for too many users on Windows and Linux.
 | Nudging with arrows, Shift ×10 | ✓ | ✓ | ✓ | |
 | Gridify while drawing, Gap tool, Live Distribute | ✓ | ✓ | ✓ | |
 | Type tool: caret, selection, double/triple click, drag-and-drop text | ✓ | ✓ | ~ | formatting at a caret discarded (#289); text editing complaints (#23, #174) |
+| Selection double-click enters text editing at the clicked position | ✓ | ✓, configurable in Preferences › Type | ✓ | real mouse-event regression, engine hit testing and Windows x64 release trial; [verification](double-click-text-edit.md) |
+| Selection double-click on a placed image selects its content | ✓ | ✓, uses `select.content`; graphic bounds drive handles and content transforms | ✓ | single click keeps frame selection; real image dragging preserves the crop frame; independent of the text-editing preference; [verification](double-click-text-edit.md) |
 | Threading: click out port, load text cursor, click frame | ✓ | ✗ ports drawn only; no thread/unthread command; Primary Text Frame and autoflow on Place | ✗ | **alpha blocker** (#352, #194, #165, #140) |
 | Copy / cut / paste objects and text, Paste Into / in Place | ✓ | ✓ on macOS | ~ | **failing on Windows/Linux** (#351, #348, #312, #185, #164, #201, #212) |
 | Context menus (canvas, panels, rulers) | ✓ everywhere | 9 context-menu sites, ruler units by right-click | ~ | **not opening for several users** (#238, #187, #160) |

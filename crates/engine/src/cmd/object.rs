@@ -972,10 +972,34 @@ fn renumber(dst: &mut Document, src: &Document, it: &mut Item, stories: &mut Has
     }
 }
 
+/// Apply a spread-space transform to the graphic, preserving its container and crop path.
+fn transform_graphic(d: &mut Document, id: ItemId, m: Affine) -> Result<()> {
+    let loc = d.find(id).ok_or(designcraft_doc::DocError::NoItem(id))?;
+    let parent = d.parent_xf(&loc);
+    let it = d.item_mut(id).ok_or(designcraft_doc::DocError::NoItem(id))?;
+    if it.locked {
+        return Ok(());
+    }
+    let frame = parent * it.xf;
+    let Some(g) = (match &mut it.content {
+        Content::Graphic(g) => Some(g),
+        _ => None,
+    }) else {
+        return Ok(());
+    };
+    let xf = frame.inverse() * m * frame * g.xf;
+    if !xf.as_coeffs().iter().all(|v| v.is_finite()) {
+        return Err(bad("transform", "the graphic's container has a non-invertible transform"));
+    }
+    g.xf = xf;
+    Ok(())
+}
+
 fn transform_move(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = targets(s, p)?;
     let (dx, dy) = (f64_or(p, "dx", 0.0), f64_or(p, "dy", 0.0));
     let copy = bool_or(p, "copy", false);
+    let content = s.doc()?.selection.content && !copy;
     let to: Option<SpreadRef> = p.get("toSpread").and_then(|v| serde_json::from_value(v.clone()).ok());
     s.edit(|d, sel| {
         let ids = if copy {
@@ -991,6 +1015,10 @@ fn transform_move(s: &mut Session, p: &Value) -> Result<Value> {
             ids
         };
         for id in &ids {
+            if content && d.item(*id).is_some_and(|it| it.graphic().is_some()) {
+                transform_graphic(d, *id, Affine::translate((dx, dy)))?;
+                continue;
+            }
             if let Some(target) = to
                 && !copy
                 && let Some(loc) = d.find(*id)
@@ -1025,8 +1053,12 @@ fn transform_resize(s: &mut Session, p: &Value) -> Result<Value> {
     let sy = if sy.abs() < 1e-3 { 1e-3f64.copysign(sy) } else { sy };
     let m = Affine::translate((to.x0, to.y0)) * Affine::scale_non_uniform(sx, sy) * Affine::translate((-from.x0, -from.y0));
     let strokes = s.prefs.scale_strokes;
-    s.edit(|d, _| {
+    s.edit(|d, sel| {
         for id in &ids {
+            if sel.content && d.item(*id).is_some_and(|it| it.graphic().is_some()) {
+                transform_graphic(d, *id, m)?;
+                continue;
+            }
             let it = d.item_mut(*id).ok_or(designcraft_doc::DocError::NoItem(*id))?;
             if it.locked {
                 continue;
@@ -1151,16 +1183,26 @@ fn clear_transformations(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn apply_about_center(s: &mut Session, p: &Value, a: Affine) -> Result<Value> {
     let ids = targets(s, p)?;
-    s.edit(|d, _| {
+    s.edit(|d, sel| {
         let mut b: Option<Rect> = None;
         for id in &ids {
             if let Some(it) = d.item(*id) {
-                b = Some(b.map_or(it.bounds(), |r| r.union(it.bounds())));
+                let bounds = if sel.content && it.graphic().is_some() {
+                    let parent = d.find(*id).map_or(Affine::IDENTITY, |loc| d.parent_xf(&loc));
+                    parent.transform_rect_bbox(it.graphic_bounds().unwrap_or_else(|| it.bounds()))
+                } else {
+                    it.bounds()
+                };
+                b = Some(b.map_or(bounds, |r| r.union(bounds)));
             }
         }
         let c = b.unwrap_or(Rect::ZERO).center();
         let m = Affine::translate(c.to_vec2()) * a * Affine::translate(-c.to_vec2());
         for id in &ids {
+            if sel.content && d.item(*id).is_some_and(|it| it.graphic().is_some()) {
+                transform_graphic(d, *id, m)?;
+                continue;
+            }
             if let Some(it) = d.item_mut(*id) {
                 it.xf = m * it.xf;
             }

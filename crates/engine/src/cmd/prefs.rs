@@ -48,7 +48,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Preferences",
             [],
             None,
-            "{showHiddenCharacters?, typographersQuotes?, polygonSides?, starInset?, scaleStrokes?, dimensionsIncludeStroke?, transformationsAreTotals?, absolutePageNumbers?, highlightHj?, highlightKeeps?, highlightCustomTracking?, highlightSubstitutedFonts?, richBlackOutput?, favoriteFonts?: [family], showFontNamesInEnglish?} → all application preferences",
+            "{showHiddenCharacters?, typographersQuotes?, doubleClickTextEdit?, polygonSides?, starInset?, scaleStrokes?, dimensionsIncludeStroke?, transformationsAreTotals?, absolutePageNumbers?, highlightHj?, highlightKeeps?, highlightCustomTracking?, highlightSubstitutedFonts?, richBlackOutput?, favoriteFonts?: [family], showFontNamesInEnglish?} → all application preferences",
             super::always,
             |s, p| {
                 let cur = serde_json::to_value(&s.prefs).map_err(|e| bad("prefs.set", e.to_string()))?;
@@ -137,6 +137,20 @@ mod tests {
         assert!(s.execute("document.preferences", &json!({"pageWidth": 100})).is_err(), "Document Setup's, not Preferences'");
         s.execute("edit.undo", &json!({})).unwrap();
         assert_eq!(s.doc().unwrap().doc.settings.horizontal_units, designcraft_geom::Unit::Picas);
+    }
+
+    #[test]
+    fn double_click_preference_defaults_and_survives_saved_json() {
+        let old: crate::Prefs = serde_json::from_str(r#"{"typographersQuotes":false}"#).unwrap();
+        assert!(old.double_click_text_edit);
+        let mut s = Session::new();
+        assert!(s.prefs.double_click_text_edit);
+        s.execute("prefs.set", &json!({"doubleClickTextEdit": false})).unwrap();
+        let saved = serde_json::to_vec_pretty(&s.prefs).unwrap();
+        let loaded: crate::Prefs = serde_json::from_slice(&saved).unwrap();
+        assert!(!loaded.double_click_text_edit);
+        assert!(s.execute("prefs.set", &json!({"doubleClickTextEdit": "false"})).is_err());
+        assert!(!s.prefs.double_click_text_edit);
     }
 }
 

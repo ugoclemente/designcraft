@@ -9,6 +9,148 @@ fn session() -> Session {
 }
 
 #[test]
+fn selection_double_click_selects_graphic_content_independently_of_text_preference() {
+    use designcraft_doc::{ItemId, SpreadRef};
+    use designcraft_geom::Point;
+    use designcraft_tools::{PointerEvent, PointerKind};
+
+    for enabled in [true, false] {
+        let mut s = session();
+        let image = s.execute("file.place", &json!({"base64": "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMDAiIGhlaWdodD0iMTAwIj48cmVjdCB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgZmlsbD0icmVkIi8+PC9zdmc+", "name": "synthetic.svg", "x": 72, "y": 72, "width": 200})).unwrap();
+        let id = ItemId(image["id"].as_u64().unwrap());
+        s.execute("prefs.set", &json!({"doubleClickTextEdit": enabled})).unwrap();
+        s.set_tool("selection");
+        s.execute("edit.deselectAll", &json!({})).unwrap();
+        let p = s.layout().xf(SpreadRef::Doc(0)) * Point::new(100.0, 100.0);
+        for kind in [PointerKind::Down, PointerKind::Up] {
+            s.pointer(&PointerEvent::new(kind, p.x, p.y), ViewInfo::default()).unwrap();
+        }
+        assert_eq!(s.doc().unwrap().selection.items, vec![id]);
+        assert!(!s.doc().unwrap().selection.content);
+        let before = s.doc().unwrap().doc.item(id).unwrap().clone();
+        let undo_count = s.doc().unwrap().history.undo.len();
+        s.pointer(&PointerEvent::new(PointerKind::DoubleClick, p.x, p.y), ViewInfo::default()).unwrap();
+        assert_eq!(s.tool_id(), "selection");
+        assert!(s.doc().unwrap().selection.content);
+        assert!(s.doc().unwrap().selection.text.is_none());
+        assert_eq!(s.doc().unwrap().doc.item(id).unwrap(), &before);
+        assert_eq!(s.doc().unwrap().history.undo.len(), undo_count, "selection does not create a document edit");
+        // Selection must affect the actual editing commands, not just a flag or an outline.
+        for (command, params) in [
+            ("transform.move", json!({"dx": 20, "dy": 10})),
+            ("transform.resize", json!({"from": [72, 72, 272, 272], "to": [72, 72, 312, 312]})),
+            ("transform.rotate", json!({"angle": 30})),
+        ] {
+            s.execute(command, &params).unwrap();
+            let after = s.doc().unwrap().doc.item(id).unwrap();
+            assert_eq!(after.path, before.path, "{command} changed the crop path");
+            assert_eq!(after.xf, before.xf, "{command} moved the frame");
+            assert_ne!(after.graphic().unwrap().xf, before.graphic().unwrap().xf, "{command} did not affect the image");
+            s.execute("edit.undo", &json!({})).unwrap();
+            assert_eq!(s.doc().unwrap().doc.item(id).unwrap(), &before);
+            assert!(s.doc().unwrap().selection.content);
+        }
+        s.execute("select.container", &json!({})).unwrap();
+        assert!(!s.doc().unwrap().selection.content);
+        s.execute("transform.move", &json!({"dx": 10})).unwrap();
+        assert_ne!(s.doc().unwrap().doc.item(id).unwrap().xf, before.xf);
+        assert_eq!(s.doc().unwrap().doc.item(id).unwrap().graphic().unwrap().xf, before.graphic().unwrap().xf);
+    }
+}
+
+#[test]
+fn direct_selection_still_moves_text_and_empty_graphic_frames() {
+    use designcraft_doc::{ItemId, SpreadRef};
+    use designcraft_geom::Point;
+    use designcraft_tools::{Mods, PointerEvent, PointerKind, ToolKey};
+    for content in ["text", "graphic"] {
+        let mut s = session();
+        let frame = s.execute("frame.create", &json!({"rect": [72, 72, 272, 272], "content": content})).unwrap();
+        let id = ItemId(frame["id"].as_u64().unwrap());
+        s.execute("edit.deselectAll", &json!({})).unwrap();
+        s.set_tool("directSelection");
+        let p = s.layout().xf(SpreadRef::Doc(0)) * Point::new(100.0, 100.0);
+        for kind in [PointerKind::Down, PointerKind::Up] {
+            s.pointer(&PointerEvent::new(kind, p.x, p.y), ViewInfo::default()).unwrap();
+        }
+        let before = s.doc().unwrap().doc.item(id).unwrap().bounds();
+        s.tool_key(ToolKey::Right, Mods::default(), ViewInfo::default()).unwrap();
+        assert!(s.doc().unwrap().doc.item(id).unwrap().bounds().x0 > before.x0);
+    }
+}
+
+#[test]
+fn graphic_content_move_respects_transformed_containers_and_rejects_singular_frames() {
+    use designcraft_doc::{ItemId, SpreadRef};
+    use designcraft_geom::{Affine, Point};
+    let mut s = session();
+    let image = s.execute("file.place", &json!({"base64": "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMDAiIGhlaWdodD0iMTAwIj48cmVjdCB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgZmlsbD0icmVkIi8+PC9zdmc+", "name": "synthetic.svg", "x": 72, "y": 72, "width": 200})).unwrap();
+    let id = ItemId(image["id"].as_u64().unwrap());
+    let other = s.execute("frame.create", &json!({"rect": [300, 72, 350, 122]})).unwrap();
+    let group = ItemId(s.execute("object.group", &json!({"ids": [id.0, other["id"]]})).unwrap()["id"].as_u64().unwrap());
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().doc).item_mut(group).unwrap().xf = Affine::translate((12.0, 25.0)) * Affine::rotate(0.3);
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().doc).item_mut(id).unwrap().xf = Affine::scale_non_uniform(1.2, 0.8) * Affine::rotate(0.2);
+    s.execute("selection.set", &json!({"ids": [id.0], "content": true})).unwrap();
+    let graphic_origin = |s: &Session| {
+        let d = &s.doc().unwrap().doc;
+        let it = d.item(id).unwrap();
+        d.parent_xf(&d.find(id).unwrap()) * it.xf * it.graphic().unwrap().xf * Point::ORIGIN
+    };
+    let before = graphic_origin(&s);
+    let frame = s.doc().unwrap().doc.item(id).unwrap().clone();
+    s.execute("transform.move", &json!({"dx": 20, "dy": -10, "toSpread": SpreadRef::Doc(1)})).unwrap();
+    let after = graphic_origin(&s);
+    assert!((after.x - before.x - 20.0).abs() < 1e-8);
+    assert!((after.y - before.y + 10.0).abs() < 1e-8);
+    assert_eq!(s.doc().unwrap().doc.item(id).unwrap().xf, frame.xf);
+    assert_eq!(s.doc().unwrap().doc.find(id).unwrap().spread, SpreadRef::Doc(0));
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().doc).item_mut(id).unwrap().xf = Affine::scale(0.0);
+    let before = s.doc().unwrap().doc.item(id).unwrap().clone();
+    assert!(s.execute("transform.move", &json!({"dx": 10})).is_err());
+    assert_eq!(s.doc().unwrap().doc.item(id).unwrap(), &before);
+}
+
+#[test]
+fn selection_double_click_uses_caret_hit_testing_and_supports_typing() {
+    use designcraft_geom::Point;
+    use designcraft_tools::{PointerEvent, PointerKind};
+
+    for text in ["", "hello world\nsecond line"] {
+        let mut s = session();
+        let frame = s.execute("frame.create", &json!({"rect": [72, 72, 372, 272], "content": "text", "text": text})).unwrap();
+        for point in [[75.0, 75.0], [120.0, 85.0], [350.0, 250.0]] {
+            // Compare against the same composer-backed command used by a Type-tool click.
+            s.execute("text.placeCaret", &json!({"frame": frame["id"], "point": point})).unwrap();
+            let expected = s.doc().unwrap().selection.text.unwrap();
+            s.set_tool("selection");
+            let p = s.layout().xf(designcraft_doc::SpreadRef::Doc(0)) * Point::new(point[0], point[1]);
+            s.pointer(&PointerEvent::new(PointerKind::DoubleClick, p.x, p.y), ViewInfo::default()).unwrap();
+            assert_eq!(s.tool_id(), "type");
+            assert!(s.wants_text());
+            assert_eq!(s.doc().unwrap().selection.text, Some(expected));
+            assert_eq!(expected.anchor, expected.focus);
+            let before = s.doc().unwrap().doc.story(expected.story).unwrap().text.clone();
+            s.execute("text.insert", &json!({"text": "Z"})).unwrap();
+            let mut after = before.clone();
+            after.insert(expected.focus, 'Z');
+            assert_eq!(s.doc().unwrap().doc.story(expected.story).unwrap().text, after);
+            s.execute("edit.undo", &json!({})).unwrap();
+            assert_eq!(s.doc().unwrap().doc.story(expected.story).unwrap().text, before);
+        }
+        s.set_tool("selection");
+        s.execute("prefs.set", &json!({"doubleClickTextEdit": false})).unwrap();
+        let p = s.layout().xf(designcraft_doc::SpreadRef::Doc(0)) * Point::new(100.0, 100.0);
+        s.pointer(&PointerEvent::new(PointerKind::DoubleClick, p.x, p.y), ViewInfo::default()).unwrap();
+        assert_eq!(s.tool_id(), "selection");
+        assert!(!s.wants_text());
+        // Disabling the shortcut does not disable the Type tool itself.
+        s.set_tool("type");
+        s.pointer(&PointerEvent::new(PointerKind::Down, p.x, p.y), ViewInfo::default()).unwrap();
+        assert!(s.wants_text());
+    }
+}
+
+#[test]
 fn create_frame_type_and_undo() {
     let mut s = session();
     let r = s.execute("frame.create", &json!({"rect": [36, 36, 300, 200], "content": "text"})).unwrap();

@@ -2,7 +2,7 @@
 
 **Stage: pre-alpha** · next: alpha, ~0% and ~15–25 h away; beta ~28 points and ~420–750 h beyond that (the core-workflow gate, not the percentage: ready for real work is already ~47%)
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (shared print spooler; Windows CI passes) · **Target:** Adobe InDesign 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (text editing and image-content selection by double-click on Windows) · **Target:** Adobe InDesign 2026
 
 DesignCraft aims at full Adobe InDesign parity, and to be better: faster, open (documented JSON
 format + IDML), scriptable by agents (MCP), and available on the web.
@@ -128,6 +128,12 @@ list) · [roadmap.md](docs/roadmap.md) (milestones, plan) · [parity-checklist.m
 ## Progress log
 
 Newest first.
+
+- **2026-10-12 (image-content correction)** · The first double-click implementation set content selection but kept frame handles and movement. Reproduced the user's Windows dragging failure; selected graphic bounds now drive the orange handles, and move/resize/rotate preserve the crop frame. Grouped content uses existing hit testing with bounded descent. Regression coverage includes real mouse dragging, transformed containers, undo and unaffected text/empty-frame movement. No readiness percentage change.
+
+- **2026-10-12 (image selection)** · Selection double-click on a placed image invokes the existing content-selection command. Single clicks select the frame; the text preference does not disable image selection. Engine/UI regressions and a native Windows x64 trial passed, including cropped-content outlines and return to the container. No readiness percentage change.
+
+- **2026-10-12 (text editing)** · Selection double-clicks reach the Type tool on mouse release and place a composer-backed caret; immediate keyboard input works. Preferences › Type has a persistent, enabled-by-default option with an Italian translation. Relevant engine/UI regressions and the Windows x64 release trial passed. Full local CI remains limited by a Windows symlink privilege test and font-menu expectations; [verification](docs/double-click-text-edit.md). No readiness percentage change.
 
 - **2026-10-12** · Words in capitals hyphenate like capitalized words (FERRUM COM-MODI), as in InDesign; Hyphenate Capitalized Words off keeps them whole. No readiness percentage change.
 - **2026-10-11** · `transform.move {copy}`, Edit › Duplicate and Step and Repeat return the copies' ids, so a script can go on with them. No readiness percentage change.

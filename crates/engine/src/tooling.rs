@@ -98,7 +98,18 @@ impl Session {
     }
 
     pub fn pointer(&mut self, ev: &PointerEvent, view: ViewInfo) -> Result<()> {
-        let actions = self.with_ctx(view, |t, cx| t.pointer(cx, ev)).unwrap_or_default();
+        let suppress_text_edit = !self.prefs.double_click_text_edit
+            && ev.kind == designcraft_tools::PointerKind::DoubleClick
+            && matches!(self.tool_id(), "selection" | "directSelection");
+        let actions = self
+            .with_ctx(view, |t, cx| {
+                if suppress_text_edit && cx.hit_content(ev.pos).is_some_and(|(_, id)| cx.doc.item(id).is_some_and(|it| it.is_text_frame())) {
+                    vec![]
+                } else {
+                    t.pointer(cx, ev)
+                }
+            })
+            .unwrap_or_default();
         self.run_actions(actions)
     }
 

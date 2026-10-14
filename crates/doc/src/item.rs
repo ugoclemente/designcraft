@@ -1077,6 +1077,11 @@ impl Item {
             _ => None,
         }
     }
+    /// Unclipped bounds of the placed graphic in the item's parent space.
+    pub fn graphic_bounds(&self) -> Option<Rect> {
+        let g = self.graphic()?;
+        Some((self.xf * g.xf).transform_rect_bbox(Rect::new(0.0, 0.0, g.size.0, g.size.1)))
+    }
     pub fn children(&self) -> &[Arc<Item>] {
         match &self.content {
             Content::Group { items } => items,

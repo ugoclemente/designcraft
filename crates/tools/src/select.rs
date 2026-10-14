@@ -4,7 +4,7 @@
 //! the 8 bounding-box handles resize (Shift keeps proportions, Alt from centre, Cmd scales content),
 //! empty-canvas drags make a marquee, double-clicking a text frame switches to the Type tool.
 
-use designcraft_doc::{ItemId, SpreadRef};
+use designcraft_doc::{Content, ItemId, SpreadRef};
 use designcraft_geom::{Affine, Point, Rect, Vec2};
 use serde_json::{Value, json};
 
@@ -350,7 +350,7 @@ fn axis_length(edges: [bool; 3], size: f64, pad: f64) -> Option<f64> {
 
 /// Visible size minus path size, for one selected item. Centered stroke then matches the outer edge.
 fn single_stroke_pad(cx: &ToolContext) -> (f64, f64) {
-    if cx.selection.items.len() != 1 {
+    if cx.selection.content || cx.selection.items.len() != 1 {
         return (0.0, 0.0);
     }
     let Some(id) = cx.selection.items.first() else { return (0.0, 0.0) };
@@ -412,9 +412,13 @@ impl Tool for SelectionTool {
                     self.drag = Drag::Pending { start: p, hit: true };
                     return vec![Action::Exec("layout.overrideParentItems".into(), json!({"page": page, "ids": [id.0]}))];
                 }
-                match cx.hit(p) {
+                match if cx.selection.content { cx.hit_content(p) } else { cx.hit(p) } {
                     Some((sr, id)) => {
-                        let id = if self.direct { id } else { cx.doc.top_level_of(id).unwrap_or(id) };
+                        let id = if self.direct || (cx.selection.content && cx.selection.contains(id)) {
+                            id
+                        } else {
+                            cx.doc.top_level_of(id).unwrap_or(id)
+                        };
                         let mut out = vec![];
                         if ev.mods.shift {
                             if cx.selection.contains(id) {
@@ -469,7 +473,9 @@ impl Tool for SelectionTool {
                         }
                     }
                     // Snap on the spread under the pointer. Shift uses that spread's view rotation.
-                    let target = cx.layout.spread_at(p).map(|(s, _)| s).unwrap_or(origin_spread);
+                    let moving_graphic =
+                        cx.selection.content && cx.selection.items.iter().any(|id| cx.doc.item(*id).is_some_and(|it| it.graphic().is_some()));
+                    let target = if moving_graphic { origin_spread } else { cx.layout.spread_at(p).map(|(s, _)| s).unwrap_or(origin_spread) };
                     // 180 degrees keeps the screen axis. 90 and 270 swap it into the other spread axis.
                     let odd_turn = cx.layout.slot(target).is_some_and(|slot| slot.rotation % 2 == 1);
                     let spread_x_locked = if odd_turn { screen_y_locked } else { screen_x_locked };
@@ -707,15 +713,17 @@ impl Tool for SelectionTool {
                 }
             }
             PointerKind::DoubleClick => {
-                if let Some((_, id)) = cx.hit(p)
-                    && cx.doc.item(id).is_some_and(|i| i.is_text_frame())
-                {
-                    let (sr, sp) = cx.layout.spread_at(p).unwrap_or((SpreadRef::Doc(0), p));
-                    let _ = sr;
+                let Some((sr, id)) = cx.hit_content(p) else { return vec![] };
+                let Some(item) = cx.doc.item(id) else { return vec![] };
+                if item.is_text_frame() {
+                    let sp = cx.layout.to_spread(sr, p);
                     return vec![
                         Action::SwitchTool("type".into()),
                         Action::Exec("text.placeCaret".into(), json!({"frame": id.0, "point": [sp.x, sp.y]})),
                     ];
+                }
+                if matches!(item.content, Content::Graphic(_)) {
+                    return vec![Action::Exec("selection.set".into(), json!({"ids": [id.0]})), Action::Exec("select.content".into(), json!({}))];
                 }
                 vec![]
             }

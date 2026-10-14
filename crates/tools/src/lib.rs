@@ -216,6 +216,26 @@ impl ToolContext<'_> {
         self.doc.hit_item(si, sp, self.tol(4.0)).map(|id| (sr, id))
     }
 
+    /// The frontmost editable leaf inside the hit container. Normal clicks still use `hit`.
+    pub fn hit_content(&self, p: Point) -> Option<(SpreadRef, ItemId)> {
+        let (sr, id) = self.hit(p)?;
+        let mut item = self.doc.item(id)?;
+        let mut at = self.layout.to_spread(sr, p);
+        let editable = |it: &Item| !it.hidden && !it.locked && self.doc.layer(it.layer).is_none_or(|layer| layer.visible && !layer.locked);
+        // Bound descent even for hostile deeply nested documents.
+        for _ in 0..64 {
+            if !editable(item) {
+                return None;
+            }
+            if item.children().is_empty() {
+                return Some((sr, item.id));
+            }
+            at = item.xf.inverse() * at;
+            item = item.shown_children().filter(|it| editable(it) && designcraft_doc::edit_hit(it, at, self.tol(4.0))).last()?;
+        }
+        None
+    }
+
     /// The parent item showing (not yet overridden) on the document page under `p`:
     /// (absolute page, parent item).
     pub fn hit_parent_on_page(&self, p: Point) -> Option<(usize, ItemId)> {
@@ -255,7 +275,8 @@ impl ToolContext<'_> {
         let mut r: Option<Rect> = None;
         for id in &self.selection.items {
             let (Some(it), Some(xf)) = (self.doc.item(*id), self.item_canvas_xf(*id)) else { continue };
-            let b = xf.transform_rect_bbox(it.bounds());
+            let bounds = if self.selection.content { it.graphic_bounds().unwrap_or_else(|| it.bounds()) } else { it.bounds() };
+            let b = xf.transform_rect_bbox(bounds);
             r = Some(r.map_or(b, |r| r.union(b)));
         }
         r
@@ -266,7 +287,9 @@ impl ToolContext<'_> {
         let mut acc: Option<Rect> = None;
         for id in &self.selection.items {
             let (Some(it), Some(xf)) = (self.doc.item(*id), self.item_canvas_xf(*id)) else { continue };
-            let Some(local) = crate::snap::moving_bounds(it) else { continue };
+            let local =
+                if self.selection.content { it.graphic_bounds().or_else(|| crate::snap::moving_bounds(it)) } else { crate::snap::moving_bounds(it) };
+            let Some(local) = local else { continue };
             let b = xf.transform_rect_bbox(local);
             if !(b.x0.is_finite() && b.y0.is_finite() && b.x1.is_finite() && b.y1.is_finite()) {
                 continue;
