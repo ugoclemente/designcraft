@@ -2,7 +2,7 @@
 
 **Stage: pre-alpha** · next: alpha, ~0% and ~15–25 h away; beta ~28 points and ~420–750 h beyond that (the core-workflow gate, not the percentage: ready for real work is already ~47%)
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (frame-edge occlusion and independent background guides/grids) · **Target:** Adobe InDesign 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (Text Wrap offsets/outline, Control formatting and multicolumn caret navigation) · **Target:** Adobe InDesign 2026
 
 DesignCraft aims at full Adobe InDesign parity, and to be better: faster, open (documented JSON
 format + IDML), scriptable by agents (MCP), and available on the web.
@@ -126,6 +126,12 @@ list) · [roadmap.md](docs/roadmap.md) (milestones, plan) · [parity-checklist.m
 [cjk-typography.md](docs/cjk-typography.md) · Arabic: [arabic-typography.md](docs/arabic-typography.md)
 
 ## Progress log
+
+- **2026-10-15 (Text Wrap offsets and outline)** · Properties and the dedicated Text Wrap panel now share four live top/left/bottom/right offset fields, with a link button for equal edits. The selected object's non-printing wrap rectangle uses the composer's exclusion bounds. The Properties ellipsis activates the existing panel through the docking command, including floating/customized layouts. UI, document and composition regressions cover individual/linked edits, undo/redo, persistence, actual reflow and outline visibility. No readiness percentage change.
+
+- **2026-10-15 (Control formatting selectors)** · The Control panel's A/paragraph indicators are now clickable, selecting character-first or paragraph-first controls through a UI command and persisted UI state. Font size and leading reuse the original icons from Properties instead of font-dependent Unicode captions. UI regressions cover both directions, Italian/English, narrow/wide windows, selection preservation and persistence. No readiness percentage change.
+
+- **2026-10-15 (caret navigation across columns)** · Up/Down now hit-test the adjacent composed line directly and translate the caret's horizontal offset when crossing columns or threaded frames. This prevents returning to the old column at the next column's baseline. Regressions cover three-column flow in both directions, RTL story order, Shift selection, insertion, threaded frames, empty frames and horizontal/vertical text. No readiness percentage change.
 
 Newest first.
 

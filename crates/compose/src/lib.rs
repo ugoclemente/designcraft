@@ -366,9 +366,7 @@ pub fn frame_specs(doc: &Document, sid: StoryId) -> Vec<FrameSpec> {
                 if doc.layer(other.layer).is_some_and(|l| !l.visible) {
                     continue;
                 }
-                let o = other.wrap.offsets;
-                let b = other.bounds();
-                let r = Rect::new(b.x0 - o[1], b.y0 - o[0], b.x1 + o[3], b.y1 + o[2]);
+                let Some(r) = other.text_wrap_bounds() else { continue };
                 let inner = inv.transform_rect_bbox(r);
                 exclusions.push(Exclusion { rect: inner, mode: other.wrap.mode });
             }
@@ -3026,25 +3024,31 @@ pub fn hit(cs: &ComposedStory, fi: usize, p: Point) -> Option<usize> {
         .filter(|l| p.x >= l.x0 - 20.0 && p.x <= l.x1 + 20.0 || ft.columns.len() <= 1)
         .min_by(|a, b| line_dist(a, p.y).total_cmp(&line_dist(b, p.y)))
         .or_else(|| ft.lines.first())?;
+    Some(hit_line(l, p))
+}
+
+/// Story byte nearest to `p` on a known line (frame inner space). Keyboard navigation uses
+/// this after choosing a line in story order, without hit-testing other columns again.
+pub fn hit_line(l: &Line, p: Point) -> usize {
     if l.glyphs.iter().any(|g| g.rtl) {
         // Bidi: the caret position drawn nearest the point.
-        return caret_stops(l).into_iter().min_by(|a, b| (a.1 - p.x).abs().total_cmp(&(b.1 - p.x).abs())).map(|s| s.0);
+        return caret_stops(l).into_iter().min_by(|a, b| (a.1 - p.x).abs().total_cmp(&(b.1 - p.x).abs())).map(|s| s.0).unwrap_or(l.range.start);
     }
     if line_has_stacked_rows(l) {
-        return Some(hit_stacked(l, p));
+        return hit_stacked(l, p);
     }
     let mut best = l.range.start;
     let mut prev_mid = f64::NEG_INFINITY;
     for g in l.glyphs.iter().filter(|g| g.len > 0) {
         let mid = g.x + g.adv / 2.0;
         if p.x < mid && p.x >= prev_mid {
-            return Some(g.byte);
+            return g.byte;
         }
         prev_mid = mid;
         best = g.byte + g.len;
     }
     // After the last glyph: line end (before the paragraph separator / break).
-    Some(if l.last_in_para { l.range.end } else { best.min(l.range.end) })
+    if l.last_in_para { l.range.end } else { best.min(l.range.end) }
 }
 
 fn line_dist(l: &Line, y: f64) -> f64 {

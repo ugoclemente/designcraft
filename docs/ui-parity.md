@@ -1,6 +1,6 @@
 # UI and interaction parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (frame-edge occlusion and independent background guides/grids) · **Target:** Adobe InDesign 2026 (21.6, Medium Dark, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (Text Wrap offsets/outline, Control formatting and multicolumn caret navigation) · **Target:** Adobe InDesign 2026 (21.6, Medium Dark, macOS)
 
 Tools, handles, snapping, nudging, modifiers, shortcuts, panels, menus, context menus and feel,
 against InDesign 2026. The look was measured from the running app
@@ -27,7 +27,9 @@ basics of editing fail for too many users on Windows and Linux.
 | Area | InDesign 2026 | DesignCraft | Status | Evidence |
 |---|---|---|---|---|
 | Chrome: app bar, Control panel, Tools panel, dock, doc tabs, status bar | Medium Dark, measured sizes | measured look | ✓ | 11-observed-ui.md |
+| Control: character/paragraph selectors, size/leading icons | Clickable formatting modes, distinct icons | Clickable A/paragraph selectors, persisted priority, shared Properties icons | ✓ | English/Italian UI tests at narrow/wide widths; [verification](control-formatting.md) |
 | Properties panel and Contextual Task Bar | per selection | ✓, task bar movable (#143) | ✓ | |
+| Text Wrap: four offsets, link button and selected wrap outline | Independent/equal offset edits, visible exclusion boundary | Shared live fields in Properties and Text Wrap; functional more-options activation | ✓ | [Regression and verification](text-wrap-offsets.md) |
 | Selection tool: click, marquee, move, Alt-duplicate, resize handles, rotate from corners | ✓ | ✓ | ✓ | |
 | Unselected frame edges obey object stacking; selected outline stays visible | ✓ | ✓, item-composited screen edges | ✓ | opaque content hides only the covered edge segments; renderer/UI regressions; [verification](frame-edge-occlusion.md) |
 | Direct Selection, Pen family, Pencil, Scissors | ✓ | ✓ | ~ | moving reference point "0" fails (#337) |
@@ -39,6 +41,7 @@ basics of editing fail for too many users on Windows and Linux.
 | Nudging with arrows, Shift ×10 | ✓ | ✓ | ✓ | |
 | Gridify while drawing, Gap tool, Live Distribute | ✓ | ✓ | ✓ | |
 | Type tool: caret, selection, double/triple click, drag-and-drop text | ✓ | ✓ | ~ | formatting at a caret discarded (#289); text editing complaints (#23, #174) |
+| Up/Down through text columns | Next/previous line in story order | Adjacent line hit-testing, column-relative x across columns/frames | ✓ | [Regression and verification](multicolumn-caret-navigation.md) |
 | Selection double-click enters text editing at the clicked position | ✓ | ✓, configurable in Preferences › Type | ✓ | real mouse-event regression, engine hit testing and Windows x64 release trial; [verification](double-click-text-edit.md) |
 | Selection double-click on a placed image selects its content | ✓ | ✓, uses `select.content`; graphic bounds drive handles and content transforms | ✓ | single click keeps frame selection; real image dragging preserves the crop frame; independent of the text-editing preference; [verification](double-click-text-edit.md) |
 | Threading: click out port, load text cursor, click frame | ✓ | ✗ ports drawn only; no thread/unthread command; Primary Text Frame and autoflow on Place | ✗ | **alpha blocker** (#352, #194, #165, #140) |

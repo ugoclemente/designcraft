@@ -217,6 +217,10 @@ pub struct UiState {
     /// Edit › Keyboard Shortcuts: command id → shortcut ("" = none), over the defaults.
     pub shortcuts: std::collections::BTreeMap<String, String>,
     pub control_bar: bool,
+    /// Control panel: show paragraph formatting before character formatting.
+    pub control_paragraph: bool,
+    /// Link the four Text Wrap offset fields; applies on the next field edit.
+    pub wrap_offsets_linked: bool,
     pub tools_double_column: bool,
     /// Expanded right-dock panel group tab.
     pub dock_tab: String,
@@ -327,6 +331,8 @@ impl Default for UiState {
             overprint_preview: false,
             shortcuts: Default::default(),
             control_bar: false,
+            control_paragraph: false,
+            wrap_offsets_linked: false,
             tools_double_column: false,
             dock_tab: "properties".into(),
             open_panel: None,

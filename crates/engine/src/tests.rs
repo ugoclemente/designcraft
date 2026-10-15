@@ -664,6 +664,29 @@ fn object_set_flags_and_wrap_invert() {
 }
 
 #[test]
+fn asymmetric_text_wrap_offsets_recompose_undo_and_survive_document_save() {
+    let mut s = session();
+    let text = s.execute("frame.create", &json!({"rect": [0, 0, 300, 600], "content": "text", "text": "word ".repeat(300)})).unwrap();
+    let sid = doc::StoryId(text["story"].as_u64().unwrap());
+    let f = s.execute("frame.create", &json!({"rect": [90, 60, 180, 120]})).unwrap();
+    let id = doc::ItemId(f["id"].as_u64().unwrap());
+    let plain = s.cache.get(&s.doc().unwrap().doc, sid, None);
+    s.execute("object.textWrap", &json!({"mode": "boundingBox", "offset": [9, 11, 13, 15]})).unwrap();
+    let cs = s.cache.get(&s.doc().unwrap().doc, sid, None);
+    assert!(!std::sync::Arc::ptr_eq(&plain, &cs));
+    let specs = compose::frame_specs(&s.doc().unwrap().doc, sid);
+    assert_eq!(specs[0].exclusions[0].rect, designcraft_geom::Rect::new(79.0, 51.0, 195.0, 133.0));
+    assert!(cs.frames[0].lines.iter().any(|l| l.x0 >= 195.0 && l.baseline > 60.0 && l.baseline < 120.0));
+    let bytes = designcraft_format::save(&s.doc().unwrap().doc).unwrap();
+    let back = designcraft_format::load(&bytes).unwrap();
+    assert_eq!(back.item(id).unwrap().wrap.offsets, [9.0, 11.0, 13.0, 15.0]);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().doc.item(id).unwrap().wrap.mode, doc::WrapMode::None);
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().doc.item(id).unwrap().wrap.offsets, [9.0, 11.0, 13.0, 15.0]);
+}
+
+#[test]
 fn gridify_while_drawing_frames() {
     use designcraft_tools::{Mods, PointerEvent, PointerKind, ToolKey};
     let mut s = session();

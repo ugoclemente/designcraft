@@ -1106,6 +1106,18 @@ impl Item {
         self.path.bounds().unwrap_or(Rect::ZERO)
     }
 
+    /// Text-wrap exclusion bounds in the same parent space as `bounds()`. Shared by
+    /// composition and the non-printing selection outline (top, left, bottom, right).
+    pub fn text_wrap_bounds(&self) -> Option<Rect> {
+        if self.wrap.mode == WrapMode::None {
+            return None;
+        }
+        let b = self.bounds();
+        let [top, left, bottom, right] = self.wrap.offsets;
+        let r = Rect::new(b.x0 - left, b.y0 - top, b.x1 + right, b.y1 + bottom);
+        ([r.x0, r.y0, r.x1, r.y1].iter().all(|v| v.is_finite()) && r.x0 <= r.x1 && r.y0 <= r.y1).then_some(r)
+    }
+
     /// Spread-space geometric bounds (axis-aligned box of the transformed path; groups: union).
     /// A group (its bounds are its children's). A frame holding pasted-into items is not.
     pub fn is_group(&self) -> bool {
@@ -1196,6 +1208,22 @@ impl Item {
 mod tests {
     use super::*;
     use designcraft_geom::shapes;
+
+    #[test]
+    fn text_wrap_bounds_share_asymmetric_offsets_and_reject_invalid_geometry() {
+        let mut it = Item::new(ItemId(1), LayerId(1), Shape::Rectangle, shapes::rectangle(Rect::new(0.0, 0.0, 100.0, 50.0)));
+        it.xf = Affine::translate((20.0, 30.0));
+        assert_eq!(it.text_wrap_bounds(), None);
+        it.wrap.mode = WrapMode::BoundingBox;
+        it.wrap.offsets = [3.0, 2.0, 6.0, 4.0];
+        assert_eq!(it.text_wrap_bounds(), Some(Rect::new(18.0, 27.0, 124.0, 86.0)));
+        it.wrap.offsets = [-3.0, -2.0, -6.0, -4.0];
+        assert_eq!(it.text_wrap_bounds(), Some(Rect::new(22.0, 33.0, 116.0, 74.0)));
+        it.wrap.offsets = [-1000.0; 4];
+        assert_eq!(it.text_wrap_bounds(), None);
+        it.wrap.offsets = [f64::NAN; 4];
+        assert_eq!(it.text_wrap_bounds(), None);
+    }
 
     #[test]
     fn bounds_and_text_area() {

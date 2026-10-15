@@ -785,6 +785,9 @@ fn draw_selection(app: &DesignApp, painter: &egui::Painter, xf: &Xf, doc: &Docum
         for poly in path_screen(it, xf, a) {
             painter.add(egui::Shape::line(poly, Stroke::new(1.0, color)));
         }
+        if let Some(wrap) = it.text_wrap_bounds() {
+            painter.rect_stroke(xf.rect(a.transform_rect_bbox(wrap)), 0.0, Stroke::new(1.0, color), StrokeKind::Middle);
+        }
         if sel.items.len() == 1 && sel.text.is_none() && !sel.content {
             // InDesign draws a 1 pt bounding box around the selection.
             painter.rect_stroke(xf.rect(a.transform_rect_bbox(it.bounds())), 0.0, Stroke::new(1.0, color), StrokeKind::Middle);
@@ -1784,6 +1787,36 @@ mod tests {
     }
 
     #[test]
+    fn selected_text_wrap_outline_tracks_offsets_and_disappears_when_deselected() {
+        let _gpu_guard = PIXEL_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut app = DesignApp::new(designcraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({})).unwrap();
+        app.run("frame.create", json!({"rect": [100, 100, 200, 200]})).unwrap();
+        app.run("object.textWrap", json!({"mode": "boundingBox", "offset": [10, 20, 30, 40]})).unwrap();
+        app.ui.guides = false;
+        app.ui.frame_edges = false;
+        let mut h = harness(app);
+        let red_at = |h: &mut Harness<'_, DesignApp>, y: f64| {
+            let app = h.state();
+            let xf = Xf::new(app.canvas_rect.unwrap(), app.view().unwrap());
+            let p = xf.to_screen(app.session.layout().xf(SpreadRef::Doc(0)) * Point::new(150.0, y));
+            let image = h.render().unwrap();
+            (0..3).map(|dy| image.get_pixel(p.x.round() as u32, (p.y.round() as u32).saturating_sub(1) + dy).0[0]).min().unwrap()
+        };
+        assert!(red_at(&mut h, 90.0) < 200, "selected wrap top must be visible outside the frame");
+        h.state_mut().run("object.textWrap", json!({"mode": "boundingBox", "offset": [20, 20, 30, 40]})).unwrap();
+        h.run_steps(3);
+        assert!(red_at(&mut h, 80.0) < 200);
+        assert!(red_at(&mut h, 90.0) > 240);
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        h.run_steps(3);
+        assert!(red_at(&mut h, 90.0) < 200);
+        h.state_mut().run("edit.deselectAll", json!({})).unwrap();
+        h.run_steps(3);
+        assert!(red_at(&mut h, 90.0) > 240);
+    }
+
+    #[test]
     fn frame_edges_hide_beneath_images_except_the_selected_frame() {
         let _gpu_guard = PIXEL_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         for content in ["text", "graphic"] {
@@ -1972,6 +2005,50 @@ mod tests {
             assert_eq!(after.xf, before.xf, "dragging selected image content moved the frame");
             assert_ne!(after.graphic().unwrap().xf, before.graphic().unwrap().xf);
         }
+    }
+
+    #[test]
+    fn type_tool_arrow_keys_cross_columns_and_type_at_the_destination() {
+        let mut app = DesignApp::new(designcraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({})).unwrap();
+        let frame = app
+            .run(
+                "frame.create",
+                json!({"rect": [72, 72, 540, 230], "content": "text", "text": "abc def ghi jkl café mno pqr stu vwx yz ".repeat(120)}),
+            )
+            .unwrap();
+        app.run("object.textFrameOptions", json!({"ids": [frame["id"]], "columns": 3, "gutter": 18})).unwrap();
+        app.session.set_tool("type");
+        let sid = designcraft_doc::StoryId(frame["story"].as_u64().unwrap());
+        let cs = app.session.cache.get(&app.session.doc().unwrap().doc, sid, None);
+        let ft = &cs.frames[0];
+        let from = ft.lines.iter().rfind(|l| l.column == 0).unwrap();
+        let to = ft.lines.iter().find(|l| l.column == 1).unwrap();
+        let pos = from.glyphs.iter().filter(|g| g.len > 0).nth(2).unwrap().byte;
+        let (_, x, y, asc, _) = designcraft_engine::compose::caret(&cs, pos).unwrap();
+        let mut h = harness(app);
+        let app = h.state();
+        let xf = Xf::new(app.canvas_rect.unwrap(), app.view().unwrap());
+        let item = app.session.doc().unwrap().doc.item(designcraft_doc::ItemId(frame["id"].as_u64().unwrap())).unwrap();
+        let p = xf.to_screen(app.session.layout().xf(SpreadRef::Doc(0)) * item.xf * Point::new(x, y - asc / 2.0));
+        primary_click(&mut h, p, false);
+        assert_eq!(h.state().session.doc().unwrap().selection.text.unwrap().focus, pos);
+        h.key_press(egui::Key::ArrowDown);
+        h.run_steps(3);
+        let next = h.state().session.doc().unwrap().selection.text.unwrap().focus;
+        assert!(to.range.contains(&next));
+        h.key_press(egui::Key::ArrowUp);
+        h.run_steps(3);
+        let back = h.state().session.doc().unwrap().selection.text.unwrap().focus;
+        assert!(from.range.contains(&back));
+        assert!((designcraft_engine::compose::caret_x(from, back) - x).abs() < 8.0);
+        h.key_press(egui::Key::ArrowDown);
+        h.run_steps(3);
+        let next = h.state().session.doc().unwrap().selection.text.unwrap().focus;
+        assert!(to.range.contains(&next));
+        h.input_mut().events.push(egui::Event::Text("Z".into()));
+        h.step();
+        assert!(h.state().session.doc().unwrap().doc.story(sid).unwrap().text[next..].starts_with('Z'));
     }
 
     #[test]

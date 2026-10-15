@@ -148,6 +148,8 @@ pub const UI_COMMANDS: &[(&str, &str, Option<&str>, &str)] = &[
     ("window.panel.close", "Close Panel", None, "{panel} — hide a panel"),
     ("window.dockPanel", "Dock Panel", None, "{panel} — back into the dock's icon column"),
     ("window.controlBar", "Control", Some("Cmd+Alt+6"), "{}"),
+    ("window.textWrapLink", "Make all settings the same", None, "{on?: bool} — link the four Text Wrap offset fields"),
+    ("window.controlFormatting", "Control Formatting", None, "{mode: character|paragraph} — choose the Control panel's primary formatting controls"),
     ("window.split", "Split Window", None, "{on?: bool} — two views of the document side by side, each with its own zoom and scroll"),
     ("window.newWindow", "New Window", None, "{on?: bool} — another view of the active document in its own window"),
     ("window.taskBar", "Contextual Task Bar", None, "{}"),
@@ -1310,6 +1312,24 @@ pub fn run_ui(app: &mut DesignApp, id: &str, p: &Value) -> Option<Result<Value, 
             Ok(json!({"floating": app.ui.floating.iter().map(|(p, _)| p.clone()).collect::<Vec<_>>()}))
         }
         "window.controlBar" => flag(&mut app.ui.control_bar),
+        "window.textWrapLink" => {
+            let on = match p.get("on") {
+                None => !app.ui.wrap_offsets_linked,
+                Some(Value::Bool(on)) => *on,
+                _ => return Some(Err("window.textWrapLink: on must be a boolean".into())),
+            };
+            app.ui.wrap_offsets_linked = on;
+            Ok(json!(on))
+        }
+        "window.controlFormatting" => {
+            let paragraph = match p.get("mode").and_then(Value::as_str) {
+                Some("character") => false,
+                Some("paragraph") => true,
+                _ => return Some(Err("window.controlFormatting: mode must be character or paragraph".into())),
+            };
+            app.ui.control_paragraph = paragraph;
+            Ok(json!({"mode": if paragraph { "paragraph" } else { "character" }}))
+        }
         "view.flattenerPreview" => flag(&mut app.ui.flattener_preview),
         "view.tagMarkers" => {
             app.canvas.shown = None;

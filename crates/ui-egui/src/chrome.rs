@@ -196,6 +196,7 @@ pub fn control_bar(app: &mut DesignApp, ui: &mut egui::Ui) {
 fn icon_caption(ui: &mut egui::Ui, icon: &str, tip: &str) {
     let (r, resp) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
     icons::paint(ui.painter(), r, icon, Tokens::get(ui.ctx()).icon);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), tip));
     resp.on_hover_ui(|ui| {
         crate::rtl::label(ui, tip);
     });
@@ -391,19 +392,32 @@ fn control_object(app: &mut DesignApp, ui: &mut egui::Ui) {
 }
 
 fn control_text(app: &mut DesignApp, ui: &mut egui::Ui) {
-    let t = Tokens::get(ui.ctx());
     let attrs = panels::text_attrs(app);
     let chars = attrs.as_ref().map(|a| a["chars"].clone()).unwrap_or_default();
     let para = attrs.as_ref().map(|a| a["para"].clone()).unwrap_or_default();
     ui.vertical(|ui| {
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("A").font(semibold(15.0)).color(t.text_strong));
-        });
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("¶").font(semibold(15.0)).color(t.text_dim));
-        });
+        for (mode, icon, label, selected) in [
+            ("character", "panel-character", "Character Formatting", !app.ui.control_paragraph),
+            ("paragraph", "panel-paragraph", "Paragraph Formatting", app.ui.control_paragraph),
+        ] {
+            if icons::button(ui, icon, 20.0, selected, crate::i18n::tr(&app.ui.language, label)).clicked() {
+                let _ = app.run("window.controlFormatting", json!({"mode": mode}));
+            }
+        }
     });
     vsep(ui);
+    if app.ui.control_paragraph {
+        control_paragraph(app, ui, attrs.as_ref(), &para);
+        vsep(ui);
+        control_character(app, ui, &chars, &para);
+    } else {
+        control_character(app, ui, &chars, &para);
+        vsep(ui);
+        control_paragraph(app, ui, attrs.as_ref(), &para);
+    }
+}
+
+fn control_character(app: &mut DesignApp, ui: &mut egui::Ui, chars: &serde_json::Value, para: &serde_json::Value) {
     ui.vertical(|ui| {
         let fam = chars["fontFamily"].as_str().unwrap_or("").to_string();
         let sty = chars["fontStyle"].as_str().unwrap_or("").to_string();
@@ -412,7 +426,7 @@ fn control_text(app: &mut DesignApp, ui: &mut egui::Ui) {
     });
     vsep(ui);
     egui::Grid::new("ctl_char").num_columns(4).spacing(vec2(4.0, 3.0)).show(ui, |ui| {
-        caption(ui, "𝐓");
+        icon_caption(ui, "font-size", crate::i18n::tr(&app.ui.language, "Size"));
         if let Some(v) = number(ui, "csize", chars["size"].as_f64(), " pt", 54.0, 2) {
             let _ = app.run("type.char", json!({"attrs": {"size": v}}));
         }
@@ -421,7 +435,7 @@ fn control_text(app: &mut DesignApp, ui: &mut egui::Ui) {
             let _ = app.run("type.char", json!({"attrs": {"tracking": v}}));
         }
         ui.end_row();
-        caption(ui, "Ā");
+        icon_caption(ui, "leading", crate::i18n::tr(&app.ui.language, "Leading"));
         let lead = match chars["leading"]["kind"].as_str() {
             Some("points") => chars["leading"]["value"].as_f64(),
             _ => chars["size"].as_f64().map(|s| s * para["autoLeading"].as_f64().unwrap_or(1.2)),
@@ -435,7 +449,9 @@ fn control_text(app: &mut DesignApp, ui: &mut egui::Ui) {
         }
         ui.end_row();
     });
-    vsep(ui);
+}
+
+fn control_paragraph(app: &mut DesignApp, ui: &mut egui::Ui, attrs: Option<&serde_json::Value>, para: &serde_json::Value) {
     ui.vertical(|ui| {
         let cur: Align = serde_json::from_value(para["align"].clone()).unwrap_or_default();
         ui.horizontal(|ui| {
@@ -477,9 +493,8 @@ fn control_text(app: &mut DesignApp, ui: &mut egui::Ui) {
     });
     vsep(ui);
     ui.vertical(|ui| {
-        let ps = attrs.as_ref().and_then(|a| a["paragraphStyle"].as_str()).unwrap_or("").to_string();
-        let ov = attrs.as_ref().and_then(|a| a["paraOverrides"].as_u64()).unwrap_or(0)
-            + attrs.as_ref().and_then(|a| a["charOverrides"].as_u64()).unwrap_or(0);
+        let ps = attrs.and_then(|a| a["paragraphStyle"].as_str()).unwrap_or("").to_string();
+        let ov = attrs.and_then(|a| a["paraOverrides"].as_u64()).unwrap_or(0) + attrs.and_then(|a| a["charOverrides"].as_u64()).unwrap_or(0);
         panels::para_style_picker(app, ui, &ps, ov > 0, 170.0);
         let hy = para["hyphenate"].as_bool().unwrap_or(true);
         let mut h = hy;
@@ -781,6 +796,54 @@ mod tests {
 
     fn rect(h: &egui_kittest::Harness<'static, test_window::Window>, label: &str) -> egui::Rect {
         h.get_by_label(label).rect()
+    }
+
+    #[test]
+    fn control_formatting_selectors_switch_groups_without_changing_the_text_selection() {
+        for (lang, width) in [("en", 700.0), ("it", 700.0), ("en", 1440.0), ("it", 1440.0)] {
+            let mut app = app();
+            app.ui.language = lang.into();
+            app.run("file.new", serde_json::json!({})).unwrap();
+            let f = app.run("frame.create", serde_json::json!({"rect": [72, 72, 400, 250], "content": "text", "text": "Selected text"})).unwrap();
+            app.run("text.select", serde_json::json!({"story": f["story"], "anchor": 2, "focus": 8})).unwrap();
+            let before = serde_json::to_value(&app.session.doc().unwrap().selection).unwrap();
+            let mut h = test_window::open(app, vec2(width, 900.0));
+            let tr = |key| crate::i18n::tr(lang, key);
+            let size_before = rect(&h, tr("Size"));
+            assert!(size_before.min.x < rect(&h, tr("Hyphenate")).min.x);
+            h.get_by_label(tr("Paragraph Formatting")).click();
+            h.run_steps(3);
+            assert!(h.state().app.ui.control_paragraph);
+            assert!(rect(&h, tr("Hyphenate")).min.x < rect(&h, tr("Size")).min.x);
+            assert_eq!(serde_json::to_value(&h.state().app.session.doc().unwrap().selection).unwrap(), before);
+            h.get_by_label(tr("Character Formatting")).click();
+            h.run_steps(3);
+            assert!(!h.state().app.ui.control_paragraph);
+            assert_eq!(rect(&h, tr("Size")), size_before);
+            let bar = test_window::panel_rect(&h, "control_bar");
+            assert!(bar.contains_rect(rect(&h, tr("Size"))));
+            assert!(bar.contains_rect(rect(&h, tr("Leading"))));
+            assert_eq!(serde_json::to_value(&h.state().app.session.doc().unwrap().selection).unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn control_formatting_command_validates_and_persists_the_mode() {
+        let mut app = app();
+        assert!(!crate::UiState::default().control_paragraph);
+        app.run("window.controlFormatting", serde_json::json!({"mode": "paragraph"})).unwrap();
+        let saved = serde_json::to_value(&app.ui).unwrap();
+        assert_eq!(saved["controlParagraph"], true);
+        let restored: crate::UiState = serde_json::from_value(saved).unwrap();
+        assert!(restored.control_paragraph);
+        let old: crate::UiState = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(!old.control_paragraph);
+        for params in [serde_json::json!({}), serde_json::json!({"mode": "invalid"}), serde_json::json!({"mode": true})] {
+            assert!(app.run("window.controlFormatting", params).is_err());
+            assert!(app.ui.control_paragraph);
+        }
+        app.run("window.controlFormatting", serde_json::json!({"mode": "character"})).unwrap();
+        assert!(!app.ui.control_paragraph);
     }
 
     #[test]

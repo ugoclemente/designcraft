@@ -729,15 +729,24 @@ fn vertical(cs: &compose::ComposedStory, pos: usize, up: bool) -> Option<usize> 
     // does not equal the parent line's baseline.
     let cur = lines.iter().position(|(i, l)| *i == fi && pos >= l.range.start && pos <= l.range.end && (pos < l.range.end || l.last_in_para))?;
     let (_, l) = lines.get(cur)?;
-    if let Some(y) = compose::adjacent_row(l, x, caret_y, up)
-        && let Some(p) = compose::hit(cs, fi, Point::new(x, y))
-        && p != pos
-    {
-        return Some(p);
+    if let Some(y) = compose::adjacent_row(l, x, caret_y, up) {
+        let p = compose::hit_line(l, Point::new(x, y));
+        if p != pos {
+            return Some(p);
+        }
     }
-    let target = if up { cur.checked_sub(1)? } else { cur + 1 };
+    let target = if up { cur.checked_sub(1)? } else { cur.checked_add(1)? };
     let (tf, tl) = lines.get(target)?;
-    compose::hit(cs, *tf, Point::new(x, tl.baseline - 1.0))
+    // Across columns/frames keep x relative to the column, not the old frame-space x.
+    // Within a column keep the absolute x, including indents and text-wrap offsets.
+    let target_x = if fi != *tf || l.column != tl.column {
+        let from = cs.frames.get(fi)?.columns.get(l.column as usize).map_or(l.x0, |c| c.x0);
+        let to = cs.frames.get(*tf)?.columns.get(tl.column as usize).map_or(tl.x0, |c| c.x0);
+        x + to - from
+    } else {
+        x
+    };
+    Some(compose::hit_line(tl, Point::new(target_x, tl.baseline)))
 }
 
 /// Where a formatting command applies: a story (or a table cell's story) and a byte range.
@@ -1809,6 +1818,90 @@ mod vertical_caret_tests {
     use serde_json::json;
 
     use crate::Session;
+
+    #[test]
+    fn arrows_follow_multicolumn_story_order_in_both_directions() {
+        for rtl in [false, true] {
+            let mut s = Session::new();
+            s.execute("file.new", &json!({})).unwrap();
+            let r = s
+                .execute(
+                    "frame.create",
+                    &json!({"rect": [72, 72, 540, 230], "content": "text", "text": "abc def ghi jkl café mno pqr stu vwx yz ".repeat(120)}),
+                )
+                .unwrap();
+            let sid = StoryId(r["story"].as_u64().unwrap());
+            s.execute("object.textFrameOptions", &json!({"ids": [r["id"]], "columns": 3, "gutter": 18})).unwrap();
+            if rtl {
+                s.execute("story.setDirection", &json!({"story": sid.0, "direction": "rightToLeft"})).unwrap();
+            }
+            let cs = s.cache.get(&s.doc().unwrap().doc, sid, None);
+            let ft = &cs.frames[0];
+            assert_eq!(ft.lines.last().unwrap().column, 2);
+            let mut transitions = 0;
+            for pair in ft.lines.windows(2) {
+                for (from, to, dir) in [(&pair[0], &pair[1], "down"), (&pair[1], &pair[0], "up")] {
+                    let pos = from.glyphs.iter().filter(|g| g.len > 0).nth(2).unwrap().byte;
+                    s.execute("text.select", &json!({"story": sid.0, "anchor": pos, "focus": pos})).unwrap();
+                    let next = mv(&mut s, dir, true, false);
+                    assert!(to.range.contains(&next), "{dir}, rtl={rtl}: {:?} -> {:?}, got {next}", from.range, to.range);
+                    let sel = s.doc().unwrap().selection.text.unwrap();
+                    assert_eq!((sel.anchor, sel.focus), (pos, next));
+                    let from_x = crate::compose::caret_x(from, pos) - ft.columns[from.column as usize].x0;
+                    let to_x = crate::compose::caret_x(to, next) - ft.columns[to.column as usize].x0;
+                    assert!((from_x - to_x).abs() < 8.0, "relative horizontal position: {from_x} -> {to_x}");
+                    if from.column != to.column {
+                        transitions += 1;
+                        // Typing immediately after crossing a column edits the destination.
+                        s.execute("text.select", &json!({"story": sid.0, "anchor": next, "focus": next})).unwrap();
+                        s.execute("text.insert", &json!({"text": "Ω"})).unwrap();
+                        assert!(s.doc().unwrap().doc.story(sid).unwrap().text[next..].starts_with('Ω'));
+                        s.execute("edit.undo", &json!({})).unwrap();
+                    }
+                }
+            }
+            assert_eq!(transitions, 4);
+        }
+    }
+
+    #[test]
+    fn arrows_cross_threaded_frames_and_stop_at_story_edges() {
+        let mut s = Session::new();
+        s.execute("file.new", &json!({})).unwrap();
+        let a = s
+            .execute("frame.create", &json!({"rect": [72, 72, 220, 140], "content": "text", "text": "abc def ghi jkl mno pqr ".repeat(25)}))
+            .unwrap();
+        let b = s.execute("frame.create", &json!({"rect": [280, 200, 490, 500], "content": "text"})).unwrap();
+        s.execute("object.textFrameOptions", &json!({"ids": [b["id"]], "inset": [8, 12, 8, 12]})).unwrap();
+        s.edit(|d, _| Ok(d.thread(designcraft_doc::ItemId(a["id"].as_u64().unwrap()), designcraft_doc::ItemId(b["id"].as_u64().unwrap()))?)).unwrap();
+        let sid = StoryId(a["story"].as_u64().unwrap());
+        let cs = s.cache.get(&s.doc().unwrap().doc, sid, None);
+        let from = cs.frames[0].lines.last().unwrap();
+        let to = &cs.frames[1].lines[0];
+        let pos = from.glyphs.iter().filter(|g| g.len > 0).nth(2).unwrap().byte;
+        s.execute("text.select", &json!({"story": sid.0, "anchor": pos})).unwrap();
+        let next = mv(&mut s, "down", false, false);
+        assert!(to.range.contains(&next));
+        assert_eq!(mv(&mut s, "up", false, false), pos);
+        s.execute("text.select", &json!({"story": sid.0, "anchor": 0})).unwrap();
+        assert_eq!(mv(&mut s, "up", false, false), 0);
+        let last = cs.frames.last().unwrap().lines.last().unwrap();
+        s.execute("text.select", &json!({"story": sid.0, "anchor": last.range.start})).unwrap();
+        assert_eq!(mv(&mut s, "down", false, false), last.range.start);
+    }
+
+    #[test]
+    fn arrows_in_empty_and_single_line_multicolumn_frames_stay_put() {
+        for text in ["", "Short text"] {
+            let mut s = Session::new();
+            s.execute("file.new", &json!({})).unwrap();
+            let r = s.execute("frame.create", &json!({"rect": [72, 72, 540, 230], "content": "text", "text": text})).unwrap();
+            s.execute("object.textFrameOptions", &json!({"ids": [r["id"]], "columns": 3})).unwrap();
+            s.execute("text.select", &json!({"story": r["story"], "anchor": 0})).unwrap();
+            assert_eq!(mv(&mut s, "up", false, false), 0);
+            assert_eq!(mv(&mut s, "down", false, false), 0);
+        }
+    }
 
     /// A story set in three or more lines; returns its id.
     fn story(s: &mut Session, vertical: bool) -> StoryId {

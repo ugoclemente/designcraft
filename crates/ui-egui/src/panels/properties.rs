@@ -744,8 +744,68 @@ fn wrap_section(app: &mut DesignApp, ui: &mut Ui, i: &SelInfo) {
             let _ = app.run("object.textWrap", json!({"mode": i.wrap, "invert": inv}));
         }
     });
-    if more_options(ui, &app.ui.language).clicked() {
-        app.ui.open_panel = Some("textWrap".into());
+    wrap_offsets(app, ui, Some(i));
+    let more = more_options(ui, &app.ui.language);
+    more.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), crate::i18n::tr(&app.ui.language, "More Options")));
+    if more.clicked() {
+        let _ = app.run("window.panel.activate", json!({"panel": "textWrap"}));
+    }
+}
+
+/// The same four live offset fields in Properties and the dedicated Text Wrap panel.
+fn wrap_offsets(app: &mut DesignApp, ui: &mut Ui, info: Option<&SelInfo>) {
+    let u = units(app);
+    let linked = app.ui.wrap_offsets_linked;
+    let enabled = info.is_some_and(|i| i.wrap != "none" && !i.locked);
+    let mut edit = None;
+    ui.add_enabled_ui(enabled, |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            for column in 0..2 {
+                if column == 1
+                    && icons::button(
+                        ui,
+                        if linked { "link" } else { "link-broken" },
+                        22.0,
+                        linked,
+                        crate::i18n::tr(&app.ui.language, "Make all settings the same"),
+                    )
+                    .clicked()
+                {
+                    let _ = app.run("window.textWrapLink", json!({"on": !linked}));
+                }
+                ui.vertical(|ui| {
+                    for (side, label, icon) in if column == 0 {
+                        [(0, "Top", "margin-top"), (2, "Bottom", "margin-bottom")]
+                    } else {
+                        [(1, "Left", "margin-inside"), (3, "Right", "margin-outside")]
+                    } {
+                        ui.horizontal(|ui| {
+                            let tip = crate::i18n::tr(&app.ui.language, label);
+                            let (r, resp) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+                            icons::paint(ui.painter(), r, icon, Tokens::get(ui.ctx()).icon);
+                            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, enabled, tip));
+                            resp.on_hover_ui(|ui| {
+                                crate::rtl::label(ui, tip);
+                            });
+                            let value = info.and_then(|i| i.wrap_offsets.get(side).copied());
+                            if let Some(v) = NumField::measure(label, value, u).width(72.0).spinner().range(-8000.0, 8000.0).show(ui) {
+                                edit = Some((side, v));
+                            }
+                        });
+                    }
+                });
+            }
+        });
+    });
+    if let (Some(i), Some((side, v))) = (info, edit) {
+        let mut offsets = i.wrap_offsets;
+        if linked {
+            offsets.fill(v);
+        } else if let Some(offset) = offsets.get_mut(side) {
+            *offset = v;
+        }
+        let _ = app.run("object.textWrap", json!({"mode": i.wrap, "offset": offsets}));
     }
 }
 
@@ -1715,13 +1775,17 @@ pub fn wrap_panel(app: &mut DesignApp, ui: &mut egui::Ui) {
             }
         }
     });
-    let u = units(app);
-    ui.horizontal(|ui| {
-        caption(ui, crate::i18n::tr(&app.ui.language, "Offset"));
-        if let Some(v) = measure(ui, "wo", Some(0.0), u, 60.0) {
-            let _ = app.run("object.textWrap", json!({"mode": info.as_ref().map(|i| i.wrap).unwrap_or("boundingBox"), "offset": v}));
-        }
-    });
+    let mut invert = info.as_ref().is_some_and(|i| i.wrap_invert);
+    if ui
+        .add_enabled_ui(info.as_ref().is_some_and(|i| i.wrap != "none"), |ui| {
+            widgets::checkbox(ui, &mut invert, crate::i18n::tr(&app.ui.language, "Invert"))
+        })
+        .inner
+        .changed()
+    {
+        let _ = app.run("object.textWrap", json!({"mode": info.as_ref().map(|i| i.wrap).unwrap_or("none"), "invert": invert}));
+    }
+    wrap_offsets(app, ui, info.as_ref());
 }
 
 /// Pathfinder panel: combine the selected shapes; make or release compound paths.
@@ -2136,6 +2200,114 @@ mod tests {
     use egui_kittest::{Harness, kittest::Queryable};
 
     use super::*;
+
+    fn wrap_test_app() -> DesignApp {
+        let mut app = DesignApp::new(designcraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({})).unwrap();
+        app.run("document.preferences", json!({"horizontalUnits": "points"})).unwrap();
+        app.run("frame.create", json!({"rect": [72, 72, 300, 200]})).unwrap();
+        app.run("object.textWrap", json!({"mode": "boundingBox", "offset": [1, 2, 3, 4]})).unwrap();
+        app
+    }
+
+    fn wrap_harness(app: DesignApp, dedicated: bool) -> Harness<'static, DesignApp> {
+        let mut h = Harness::builder().with_size(vec2(256.0, 260.0)).build_ui_state(
+            move |ui, app| {
+                let id = egui::Id::new("wrap_test_fonts");
+                if ui.data(|d| d.get_temp::<bool>(id)).is_none() {
+                    crate::theme::install_fonts(ui.ctx(), &app.ui.language);
+                    ui.data_mut(|d| d.insert_temp(id, true));
+                    return;
+                }
+                if dedicated {
+                    wrap_panel(app, ui);
+                } else if let Some(info) = sel_info(app) {
+                    wrap_section(app, ui, &info);
+                }
+            },
+            app,
+        );
+        h.run_steps(3);
+        h
+    }
+
+    fn spin_offset(h: &mut Harness<'_, DesignApp>, label: &str) {
+        let r = h.get_by_label(label).rect();
+        let p = pos2(r.max.x + 4.0 + widgets::SEG_W / 2.0, r.center().y - FIELD_H / 4.0);
+        h.hover_at(p);
+        h.drag_at(p);
+        h.drop_at(p);
+        h.run_steps(3);
+    }
+
+    #[test]
+    fn text_wrap_link_command_sets_explicit_values_without_toggling_them() {
+        let mut app = wrap_test_app();
+        for on in [false, false, true, true, false] {
+            assert_eq!(app.run("window.textWrapLink", json!({"on": on})).unwrap(), on);
+            assert_eq!(app.ui.wrap_offsets_linked, on);
+        }
+        assert!(app.run("window.textWrapLink", json!({"on": "true"})).is_err());
+        assert!(!app.ui.wrap_offsets_linked);
+        app.run("window.textWrapLink", json!({})).unwrap();
+        assert!(app.ui.wrap_offsets_linked);
+    }
+
+    #[test]
+    fn text_wrap_panels_edit_four_real_offsets_and_link_from_any_side() {
+        for dedicated in [false, true] {
+            let mut h = wrap_harness(wrap_test_app(), dedicated);
+            let offsets = |h: &Harness<'_, DesignApp>| sel_info(h.state()).unwrap().wrap_offsets;
+            assert_eq!(offsets(&h), [1.0, 2.0, 3.0, 4.0]);
+            for (label, expected) in
+                [("Top", [2.0, 2.0, 3.0, 4.0]), ("Bottom", [2.0, 2.0, 4.0, 4.0]), ("Left", [2.0, 3.0, 4.0, 4.0]), ("Right", [2.0, 3.0, 4.0, 5.0])]
+            {
+                spin_offset(&mut h, label);
+                assert_eq!(offsets(&h), expected, "{label}, dedicated={dedicated}");
+            }
+            h.get_by_label("Make all settings the same").click();
+            h.run_steps(3);
+            assert!(h.state().ui.wrap_offsets_linked);
+            for label in ["Top", "Bottom", "Left", "Right"] {
+                let before = offsets(&h);
+                spin_offset(&mut h, label);
+                assert_eq!(offsets(&h), [before[0] + 1.0; 4]);
+            }
+            h.state_mut().run("edit.undo", json!({})).unwrap();
+            h.run_steps(3);
+            assert_eq!(offsets(&h), [5.0; 4]);
+            h.state_mut().run("edit.redo", json!({})).unwrap();
+            h.run_steps(3);
+            assert_eq!(offsets(&h), [6.0; 4]);
+            let restored: crate::UiState = serde_json::from_value(serde_json::to_value(&h.state().ui).unwrap()).unwrap();
+            assert!(restored.wrap_offsets_linked);
+            h.state_mut().run("object.textWrap", json!({"mode": "none"})).unwrap();
+            h.run_steps(3);
+            spin_offset(&mut h, "Top");
+            assert_eq!(offsets(&h), [6.0; 4], "No Wrap disables offset editing");
+        }
+    }
+
+    #[test]
+    fn text_wrap_more_options_reveals_existing_or_customized_panel() {
+        for floating in [false, true] {
+            let mut app = wrap_test_app();
+            if floating {
+                app.run("window.panel.float", json!({"panel": "textWrap", "x": 400, "y": 200})).unwrap();
+            }
+            let mut h = wrap_harness(app, false);
+            h.get_by_label("More Options").click();
+            h.run_steps(3);
+            let state = &h.state().ui;
+            let layout = state.docking.as_ref().unwrap();
+            assert!(layout.contains(&"textWrap".into()));
+            assert_eq!(layout.panels().iter().filter(|id| id.as_str() == "textWrap").count(), 1);
+            assert_eq!(state.docking_opened.as_deref(), Some("textWrap"));
+            if floating {
+                assert!(layout.floating.iter().any(|g| g.panels.iter().any(|p| p == "textWrap")));
+            }
+        }
+    }
 
     fn language(app: &mut DesignApp) -> Value {
         text_attrs(app).unwrap()["chars"]["language"].clone()
