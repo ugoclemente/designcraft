@@ -10,6 +10,7 @@ use egui::{Color32, Pos2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use serde_json::{Value, json};
 
 use crate::{DesignApp, ScreenMode, View, theme::Tokens};
+mod scroll;
 
 pub const RULER: f32 = 15.0;
 
@@ -233,15 +234,20 @@ fn mods(i: &egui::InputState, space: bool) -> Mods {
 pub fn show(app: &mut DesignApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let full = ui.available_rect_before_wrap();
+    let scrollbars = app.ui.screen_mode != ScreenMode::Presentation;
+    let content = scroll::viewport(full, scrollbars);
     let rot = app.view().map_or(0, |v| v.rotation % 4);
     // Rulers measure the unrotated layout, so they hide while the view is rotated.
     let rulers = app.ui.rulers && app.ui.screen_mode != ScreenMode::Presentation && rot == 0;
-    let screen = if rulers { Rect::from_min_max(full.min + vec2(RULER, RULER), full.max) } else { full };
+    let screen = if rulers { Rect::from_min_max(content.min + vec2(RULER, RULER), content.max) } else { content };
     let rect = view_rect(screen, rot);
     app.canvas_rect = Some(rect);
-    let resp = ui.allocate_rect(full, Sense::click_and_drag());
+    let resp = ui.allocate_rect(content, Sense::click_and_drag());
     if !app.view().is_some_and(|v| v.fitted) {
         fit(app, rect, "spread");
+    }
+    if scrollbars {
+        scroll::show(app, ui, full, screen, rect);
     }
     handle_input(app, ui, &resp, rect);
     let Some(st) = app.session.active() else { return };
@@ -343,8 +349,8 @@ pub fn show(app: &mut DesignApp, ui: &mut egui::Ui) {
     let sel_rect = draw_selection(app, &painter, &xf, &doc, &layout);
     draw_tool_overlays(app, &painter, &xf);
     if rulers {
-        draw_rulers(app, ui, full, rect, &xf, &doc, &layout, &t);
-        ruler_units_menus(app, &resp, full, rect, &doc);
+        draw_rulers(app, ui, content, rect, &xf, &doc, &layout, &t);
+        ruler_units_menus(app, &resp, content, rect, &doc);
     }
     if let Some(r) = sel_rect
         && !preview
@@ -1436,6 +1442,25 @@ fn handle_input(app: &mut DesignApp, ui: &mut egui::Ui, resp: &egui::Response, r
     if resp.clicked() || resp.drag_started() {
         resp.request_focus();
     }
+    if resp.has_focus() {
+        // These keys belong to the canvas tool (caret movement or nudging),
+        // rather than egui's spatial focus navigation into adjacent scrollbars.
+        let owned_key = ui.input(|input| {
+            [egui::Key::ArrowLeft, egui::Key::ArrowRight, egui::Key::ArrowUp, egui::Key::ArrowDown].iter().any(|key| input.key_pressed(*key))
+                || (wants_text && input.key_pressed(egui::Key::Tab))
+        });
+        ui.memory_mut(|memory| {
+            // A click can acquire focus only in the previous pass. In that
+            // first keyboard pass egui has already queued spatial navigation.
+            if owned_key {
+                memory.move_focus(egui::FocusDirection::None);
+            }
+            memory.set_focus_lock_filter(
+                resp.id,
+                egui::EventFilter { horizontal_arrows: true, vertical_arrows: true, tab: wants_text, ..Default::default() },
+            )
+        });
+    }
     // Both split panes show the same document, but only the focused pane dispatches its keys.
     if app.pane != app.focus_pane || (ui.ctx().text_edit_focused() && !resp.has_focus()) {
         return;
@@ -1787,6 +1812,48 @@ mod tests {
     }
 
     #[test]
+    fn scrollbars_pan_in_both_axes_after_rotation_without_editing_the_document() {
+        for rotation in 0..4 {
+            let mut app = DesignApp::new(designcraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({})).unwrap();
+            app.run("frame.create", json!({"rect":[72,72,272,272],"content":"text","text":"Scroll fixture"})).unwrap();
+            let document = serde_json::to_value(&app.session.active().unwrap().doc).unwrap();
+            app.view_mut().unwrap().rotation = rotation;
+            app.view_mut().unwrap().zoom = 2.0;
+            app.view_mut().unwrap().fitted = true;
+            let mut h = harness(app);
+            for label in ["Horizontal", "Vertical"] {
+                let bar = h.get_by_label(label).rect();
+                let before = h.state().view().unwrap().origin;
+                let mut moved = false;
+                // A rotated view may initially be at either end of its range.
+                // Exercise both ends of the track, which must permit movement.
+                for end in [false, true] {
+                    let point = if label == "Vertical" {
+                        pos2(bar.center().x, if end { bar.bottom() - 2.0 } else { bar.top() + 2.0 })
+                    } else {
+                        pos2(if end { bar.right() - 2.0 } else { bar.left() + 2.0 }, bar.center().y)
+                    };
+                    primary_click(&mut h, point, false);
+                    h.run_steps(3);
+                    moved |= (h.state().view().unwrap().origin - before).hypot() > 1.0;
+                }
+                let after = h.state().view().unwrap().origin;
+                assert!(moved, "{label}, rotation {rotation}: {before:?} -> {after:?}");
+                assert_eq!(serde_json::to_value(&h.state().session.active().unwrap().doc).unwrap(), document);
+            }
+            let old = h.state().view().unwrap().origin;
+            assert!(h.state_mut().run("view.pan", json!({"x":12.0,"y":"invalid"})).is_err());
+            assert_eq!(h.state().view().unwrap().origin, old, "invalid pan must be atomic");
+            assert!(h.state_mut().run("view.pan", json!({})).is_err());
+            h.state_mut().run("view.screenMode", json!({"mode":"presentation"})).unwrap();
+            h.run_steps(3);
+            assert_eq!(h.query_all_by_label("Horizontal").count(), 0);
+            assert_eq!(h.query_all_by_label("Vertical").count(), 0);
+        }
+    }
+
+    #[test]
     fn selected_text_wrap_outline_tracks_offsets_and_disappears_when_deselected() {
         let _gpu_guard = PIXEL_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut app = DesignApp::new(designcraft_engine::Session::new(), crate::Services::default());
@@ -2040,7 +2107,7 @@ mod tests {
         h.key_press(egui::Key::ArrowUp);
         h.run_steps(3);
         let back = h.state().session.doc().unwrap().selection.text.unwrap().focus;
-        assert!(from.range.contains(&back));
+        assert!(from.range.contains(&back), "expected {:?}, got {back}", from.range);
         assert!((designcraft_engine::compose::caret_x(from, back) - x).abs() < 8.0);
         h.key_press(egui::Key::ArrowDown);
         h.run_steps(3);

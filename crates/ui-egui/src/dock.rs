@@ -89,8 +89,14 @@ pub fn show(app: &mut DesignApp, ui: &mut egui::Ui) {
                     crate::panel_docking::legacy_tab(app, ui, id, &response);
                     x += w;
                 }
-                let menu_r = egui::Rect::from_min_size(egui::pos2(strip.max.x - 24.0, strip.min.y + 4.0), vec2(18.0, 18.0));
-                icons::paint(ui.painter(), menu_r, "menu", t.icon);
+                let close = egui::Rect::from_min_size(egui::pos2(strip.max.x - 24.0, strip.min.y + 4.0), vec2(18.0, 18.0));
+                let label = crate::i18n::tr(&app.ui.language, "Close");
+                let response = ui.interact(close, ui.id().with("close-panel"), Sense::click()).on_hover_text(label);
+                response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
+                ui.painter().text(close.center(), egui::Align2::CENTER_CENTER, "×", egui::FontId::proportional(15.0), t.text_dim);
+                if response.clicked() {
+                    let _ = app.run("window.panel.close", serde_json::json!({"panel":app.ui.dock_tab.clone()}));
+                }
                 egui::Frame::NONE.inner_margin(egui::Margin { left: 10, right: 10, top: 4, bottom: 6 }).show(ui, |ui| {
                     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match app.ui.dock_tab.as_str() {
                         "pages" => panels::pages::show(app, ui),

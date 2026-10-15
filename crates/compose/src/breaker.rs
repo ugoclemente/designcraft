@@ -408,6 +408,16 @@ struct Node {
 
 /// Knuth–Plass total-fit line breaking. `width(line)` gives each line's measure.
 pub fn knuth_plass(glyphs: &[Glyph], hyph_after: &[bool], sp: &Spacing, width: &dyn Fn(usize) -> f64) -> Vec<Break> {
+    total_fit(glyphs, hyph_after, sp, width, false)
+}
+
+/// Prefer fewer lines among legal total-fit paths when ordinary composition
+/// leaves text overset. Character sizes and spacing limits are unchanged.
+pub(crate) fn compact(glyphs: &[Glyph], hyph_after: &[bool], sp: &Spacing, width: &dyn Fn(usize) -> f64) -> Vec<Break> {
+    total_fit(glyphs, hyph_after, sp, width, true)
+}
+
+fn total_fit(glyphs: &[Glyph], hyph_after: &[bool], sp: &Spacing, width: &dyn Fn(usize) -> f64, compact: bool) -> Vec<Break> {
     if glyphs.is_empty() {
         return vec![Break { start: 0, end: 0, next: 0, hyphen: false, forced: true }];
     }
@@ -417,7 +427,7 @@ pub fn knuth_plass(glyphs: &[Glyph], hyph_after: &[bool], sp: &Spacing, width: &
         (items, ig) = self::items(glyphs, hyph_after, &emergency_after, sp);
     }
     for tolerance in [2.5, 12.0, f64::INFINITY] {
-        if let Some(b) = kp_pass(&items, &ig, glyphs, sp, width, tolerance, tolerance.is_infinite()) {
+        if let Some(b) = kp_pass(&items, &ig, glyphs, sp, width, tolerance, tolerance.is_infinite(), compact) {
             return b;
         }
     }
@@ -476,6 +486,7 @@ fn kp_pass(
     width: &dyn Fn(usize) -> f64,
     tol: f64,
     emergency: bool,
+    compact: bool,
 ) -> Option<Vec<Break>> {
     let m = items.len();
     // Prefix sums (before item i).
@@ -499,7 +510,9 @@ fn kp_pass(
     let limit = sp.hyphen_limit as usize;
     let states = if limit == 0 { 2 } else { (limit + 1).min(MAX_HYPHEN_STATES) };
     let mut active: Vec<usize> = vec![0];
-    let mut best: Vec<Option<(f64, usize)>> = vec![None; 4 * states];
+    // Line count is part of the state: different counts reach different widths
+    // around text wrap, and are distinct alternatives when fitting a frame.
+    let mut best: std::collections::BTreeMap<(usize, usize), (f64, usize)> = Default::default();
     let mut keep = Vec::new();
     for b in 0..m {
         let it = items[b];
@@ -512,7 +525,7 @@ fn kp_pass(
             continue;
         }
         let forced = pp <= -INF;
-        best.iter_mut().for_each(|x| *x = None);
+        best.clear();
         keep.clear();
         let mut last_removed: Option<usize> = None;
         for &a in &active {
@@ -534,7 +547,11 @@ fn kp_pass(
                 // space it leaves, so the fullest piece wins (the break at the last glyph that fits).
                 r = d / target;
             }
-            if feasible && !forced {
+            // A discretionary hyphen has width that disappears when this break
+            // is not taken. It may overrun even though the complete word fits.
+            // Keep that starting node until an ordinary space proves it cannot
+            // reach a later break; pruning it here forces spurious extra lines.
+            if !forced && (feasible || it.kind == Kind::Penalty) {
                 keep.push(a);
             } else {
                 last_removed = Some(a);
@@ -582,21 +599,21 @@ fn kp_pass(
             }
             let hs = if flagged { (n.hyphens as usize + 1).min(states - 1) } else { 0 };
             let total = n.demerits + d;
-            let slot = &mut best[fit * states + hs];
-            if slot.is_none_or(|(bd, _)| total < bd) {
-                *slot = Some((total, a));
+            let slot = (n.line, fit * states + hs);
+            if best.get(&slot).is_none_or(|(bd, _)| total < *bd) {
+                best.insert(slot, (total, a));
             }
         }
         // Emergency: nothing can reach this break and nothing remains active → accept an overfull line.
         if emergency
             && keep.is_empty()
-            && best.iter().all(Option::is_none)
+            && best.is_empty()
             && let Some(a) = last_removed
         {
-            best[0] = Some((arena[a].demerits + 1e8, a));
+            best.insert((arena[a].line, 0), (arena[a].demerits + 1e8, a));
         }
         std::mem::swap(&mut active, &mut keep);
-        if best.iter().all(Option::is_none) {
+        if best.is_empty() {
             if active.is_empty() {
                 return None;
             }
@@ -625,11 +642,17 @@ fn kp_pass(
             i += 1;
         }
         // Knuth's pruning: a class is only worth a node if it is within the fitness demerit of the best.
-        let min_d = best.iter().flatten().map(|x| x.0).fold(f64::INFINITY, f64::min);
-        for (k, c) in best.iter().enumerate() {
-            if let Some((d, a)) = *c
-                && d <= min_d + 3000.0
-            {
+        let mut minima: std::collections::BTreeMap<usize, f64> = Default::default();
+        for (&(line, _), &(d, _)) in &best {
+            minima.entry(line).and_modify(|minimum| *minimum = minimum.min(d)).or_insert(d);
+        }
+        for (&(line, k), &(d, a)) in &best {
+            if minima.get(&line).is_some_and(|minimum| d <= minimum + 3000.0) {
+                // Bound work and memory for hostile text. The caller falls
+                // back to the bounded single-line breaker on exhaustion.
+                if arena.len() >= 65536 || active.len() >= 2048 {
+                    return None;
+                }
                 let prev = arena[a];
                 arena.push(Node {
                     pos: b,
@@ -648,7 +671,13 @@ fn kp_pass(
         }
     }
     // The final forced break: best node at position m-1.
-    let end = active.iter().copied().filter(|&a| arena[a].pos == m - 1).min_by(|&a, &b| arena[a].demerits.total_cmp(&arena[b].demerits))?;
+    let end = active.iter().copied().filter(|&a| arena[a].pos == m - 1).min_by(|&a, &b| {
+        if compact {
+            arena[a].line.cmp(&arena[b].line).then_with(|| arena[a].demerits.total_cmp(&arena[b].demerits))
+        } else {
+            arena[a].demerits.total_cmp(&arena[b].demerits)
+        }
+    })?;
     let mut chain = Vec::new();
     let mut cur = Some(end);
     while let Some(c) = cur {

@@ -1,6 +1,6 @@
 # Typography and composition parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (first version, from the full re-measure) · **Target:** Adobe InDesign 2026 (21.6)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (Latin optical spacing, paragraph fit, typographic metrics, grid wrapping and Italian hyphenation) · **Target:** Adobe InDesign 2026 (21.6)
 
 Typesetting is what InDesign is bought for. A feature can exist and still set text differently
 from InDesign: different line breaks, different page count, overset where InDesign fits. This
@@ -36,16 +36,16 @@ Fidelity: **unmeasured** unless stated.
 | Single-line Composer | greedy | greedy with the same ranges | ✓ | |
 | World-Ready composers | Paragraph / Single-line World-Ready | RTL, Arabic and bidi in the main composer | ~ | Indic scripts (Devanagari etc.) shape through harfrust but are untested |
 | Justification | word/letter spacing, glyph scaling min/desired/max, single-word, last line | all of these | ✓ | a justified line with a tab now justifies after the tab (#284) |
-| Hyphenation | per-language dictionaries (~40), zone, limits, capitalized, last word, across columns | Liang patterns: English (trained from the public-domain Moby list) and Spanish (Bezos); zone, limits, exceptions in the user dictionary | ~ | other languages don't hyphenate (#87 reported "doesn't work") |
+| Hyphenation | per-language dictionaries (~40), zone, limits, capitalized, last word, across columns | Liang patterns: English (trained from the public-domain Moby list) Spanish (Bezos), Portuguese and Italian (Beccari); zone, limits, exceptions in the user dictionary | ~ | other languages don't hyphenate (#87 reported "doesn't work") |
 | Spelling | per-language dictionaries | English (Moby) + document/user dictionary | ~ | |
-| Kerning | Metrics, Optical, manual, none | Metrics, manual, none | ~ | **Optical treated as Metrics** (#181): imported display text sets wider and can overset |
+| Kerning | Metrics, Optical, manual, none | Metrics, contour-based Latin optical, manual, none | ~ | Latin optical spacing uses facing glyph contours and the font's own stem rhythm, with sampled collision bounds; mixed-style boundaries and other scripts retain metrics. Not Adobe's algorithm (#181). |
 | Tracking, scale, skew, baseline shift | ✓ | ✓ | ✓ | |
 | OpenType features | ligatures, discretionary, swash, fractions, ordinals, figures, small caps, stylistic sets, positional forms | through harfrust | ✓ | |
 | Variable fonts | axes in Character panel | named instances and free axis values; PDF embeds the instance | ✓ | |
 | Leading | auto (120%), absolute, leading model | ✓ | ✓ | CJK leading models in cjk-typography.md |
 | First baseline | ascent, cap height, x-height, leading, fixed, min | ✓ | ✓ | |
-| Frame fit / overset | baseline of the last line must fit | descenders must fit | ~ | **differs** (#180): frames go overset where InDesign fits |
-| Baseline grid | document and frame grids | ✓ | ✓ | |
+| Frame fit / overset | baseline of the last line must fit | baseline fits; footnotes retain ink clearance | ✓ | Regression for the last baseline on the frame edge; full composition parity remains unverified |
+| Baseline grid | document and frame grids | ✓ | ✓ | Wrapped lines stay on the grid; first-line wrap no longer introduces an irregular gap |
 | Vertical justification | top, centre, bottom, justify, paragraph spacing limit | ✓ | ✓ | |
 | Columns, span / split columns | ✓ | ✓ | ✓ | split columns within a column (#295); text after a span flows below it (#276) |
 | Column rules | ✓ | ✓ (screen, PDF, IDML) | ~ | no stroke types or overprint (#274) |
@@ -88,3 +88,5 @@ Measured from the table above (2026-10-10): 34 rows, 18 ✓, 16 ~, 0 ✗, scorin
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-10 | major | Created: typography checklist (34 rows), fidelity gap and oracle plan |
+
+Observed CS6 comparison on Windows (2026-10-15): the same newspaper IDML retained its frame geometry, but clipping metrics instead of OS/2 typographic metrics displaced the first baseline. Typographic extents, last-baseline frame fit, on-grid wrap and Italian hyphenation are corrected. Latin optical kerning now uses contours. Total-fit paths retain distinct line counts; overset stories can retry a shorter legal path without scaling glyphs or changing style limits. All 26 stories on the observed page now fit. Some line breaks and individual glyph positions still differ; this is not a claim of identical rendering. See [idml-composition-fidelity.md](idml-composition-fidelity.md).

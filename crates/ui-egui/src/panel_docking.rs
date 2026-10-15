@@ -111,6 +111,21 @@ fn placement(params: &Value) -> Result<Placement<String>, String> {
 }
 
 pub(crate) fn command(app: &mut DesignApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
+    if id == "window.panel.toggle" {
+        return Some((|| {
+            let panel = params.get("panel").and_then(Value::as_str).and_then(normalize).ok_or("unknown panel")?;
+            let visible = app.ui.docking.as_ref().is_some_and(|l| l.contains(&panel.to_string()));
+            let active = app.ui.docking_opened.as_deref() == Some(panel) && visible;
+            let operation = if active {
+                "close"
+            } else if visible || app.ui.docking_hidden.contains_key(panel) || crate::dock::DOCK_TABS.iter().any(|p| p.0 == panel) {
+                "activate"
+            } else {
+                "float"
+            };
+            change(app, operation, params)
+        })());
+    }
     if id == "app.tablePanel" && app.ui.docking.is_some() {
         let panel = "table".to_string();
         let visible = app.ui.docking.as_ref().is_some_and(|layout| layout.contains(&panel));
@@ -223,7 +238,8 @@ fn change(app: &mut DesignApp, operation: &str, params: &Value) -> Result<Value,
     match operation {
         "dock" if restored => {}
         "float" => {
-            let rect = [number(params, "x", 400.0)?, number(params, "y", 140.0)?, number(params, "width", 300.0)?, number(params, "height", 400.0)?];
+            let height = if panel == "textWrap" { 220.0 } else { 400.0 };
+            let rect = [number(params, "x", 400.0)?, number(params, "y", 140.0)?, number(params, "width", 300.0)?, number(params, "height", height)?];
             ensure(&mut layout, panel)?;
             if let Ok(location) = layout.location(&panel.to_string())
                 && location.floating.is_none()
@@ -396,16 +412,12 @@ fn icon_rail(app: &mut DesignApp, ui: &mut egui::Ui) {
             egui::ScrollArea::vertical().id_salt("shared-panel-icons-scroll").show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 for &(id, label, icon) in crate::dock::DOCK_TABS.iter().chain(crate::dock::ICON_PANELS) {
-                    if app.ui.docking.as_ref().is_some_and(|layout| {
-                        layout.contains(&id.to_string()) && (app.ui.dock_expanded || layout.floating.iter().any(|g| g.panels.iter().any(|p| p == id)))
-                    }) {
-                        continue;
-                    }
-
-                    let response =
-                        crate::icons::button(ui, icon, 28.0, false, crate::i18n::tr(&app.ui.language, label)).interact(egui::Sense::click_and_drag());
+                    let active = app.ui.docking_opened.as_deref() == Some(id);
+                    let response = crate::icons::button(ui, icon, 28.0, active, crate::i18n::tr(&app.ui.language, label))
+                        .interact(egui::Sense::click_and_drag());
                     if response.clicked() {
-                        let _ = app.run("window.panel.activate", json!({"panel":id}));
+                        let x = (response.rect.left() - 310.0).max(ui.ctx().content_rect().left());
+                        let _ = app.run("window.panel.toggle", json!({"panel":id,"x":x,"y":response.rect.top()}));
                     }
                     legacy_tab(app, ui, id, &response);
                 }
@@ -474,12 +486,47 @@ pub(crate) fn legacy_tab(app: &mut DesignApp, ui: &mut egui::Ui, panel: &str, re
 
 struct PanelContent<'a>(&'a mut DesignApp);
 impl craft_ui::docking::DockContent<String> for PanelContent<'_> {
+    fn group_header_width(&self, _: &[String], _: &String, _: bool) -> f32 {
+        24.0
+    }
+    fn group_header(&mut self, ui: &mut egui::Ui, _: &[String], active: &String, _: bool) {
+        let rect = ui.max_rect().shrink(3.0);
+        let label = crate::i18n::tr(&self.0.ui.language, "Close");
+        let response = ui.interact(rect, ui.id().with("close-panel"), egui::Sense::click()).on_hover_text(label);
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
+        let color = crate::theme::Tokens::get(ui.ctx()).text_dim;
+        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "×", egui::FontId::proportional(15.0), color);
+        if response.clicked() {
+            let _ = self.0.run("window.panel.close", json!({"panel":active}));
+        }
+    }
     fn body(&mut self, ui: &mut egui::Ui, id: &String) {
         egui::Frame::NONE.inner_margin(egui::Margin::same(8)).show(ui, |ui| {
+            let floating = self.0.ui.docking.as_ref().and_then(|layout| layout.floating.iter().find(|g| g.panels.contains(id))).map(|g| g.rect);
             egui::ScrollArea::vertical()
                 .id_salt(("shared-panel-body", id))
                 .auto_shrink([false, false])
+                .max_height((ui.available_height() - if floating.is_some() { 18.0 } else { 0.0 }).max(0.0))
                 .show(ui, |ui| crate::dock::panel_body(self.0, ui, id));
+            if let Some([x, y, width, height]) = floating {
+                let (row, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 16.0), egui::Sense::hover());
+                let grip = egui::Rect::from_min_max(row.max - egui::vec2(16.0, 16.0), row.max);
+                let label = crate::i18n::tr(&self.0.ui.language, "Resize");
+                let response = ui
+                    .interact(grip, ui.id().with(("resize-floating-panel", id)), egui::Sense::drag())
+                    .on_hover_cursor(egui::CursorIcon::ResizeNwSe)
+                    .on_hover_text(label);
+                response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label));
+                let stroke = egui::Stroke::new(1.0, crate::theme::Tokens::get(ui.ctx()).text_dim);
+                for step in [4.0, 8.0, 12.0] {
+                    ui.painter().line_segment([grip.max - egui::vec2(step, 0.0), grip.max - egui::vec2(0.0, step)], stroke);
+                }
+                if response.dragged() {
+                    let delta = ui.input(|input| input.pointer.delta());
+                    let rect = [x, y, (width + delta.x).max(220.0), (height + delta.y).max(100.0)];
+                    let _ = self.0.run("window.panel.layout", json!({"action":{"MoveFloating":{"panel":id,"rect":rect}}}));
+                }
+            }
         });
     }
     fn label(&mut self, ui: &egui::Ui, _: &String, logical: &str, font: &egui::FontId, color: egui::Color32) -> egui::WidgetText {

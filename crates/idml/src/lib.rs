@@ -120,6 +120,9 @@ pub(crate) fn base64_decode(s: &str) -> Vec<u8> {
 
 /// Sniff an image's MIME type and pixel size from its header (PNG, JPEG, GIF, WebP, TIFF).
 pub(crate) fn sniff_image(b: &[u8]) -> (Option<&'static str>, Option<(u32, u32)>) {
+    if b.get(..4) == Some(&1u32.to_le_bytes()) && b.get(40..44) == Some(b" EMF") {
+        return (Some("image/emf"), None);
+    }
     let be32 = |i: usize| b.get(i..i + 4).map(|s| u32::from_be_bytes([s[0], s[1], s[2], s[3]]));
     if b.starts_with(b"\x89PNG\r\n\x1a\n") {
         return (Some("image/png"), be32(16).zip(be32(20)));

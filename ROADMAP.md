@@ -2,7 +2,7 @@
 
 **Stage: pre-alpha** · next: alpha, ~0% and ~15–25 h away; beta ~28 points and ~420–750 h beyond that (the core-workflow gate, not the percentage: ready for real work is already ~47%)
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (Text Wrap offsets/outline, Control formatting and multicolumn caret navigation) · **Target:** Adobe InDesign 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (IDML composition, Latin optical spacing, canvas scrollbars and panel controls) · **Target:** Adobe InDesign 2026
 
 DesignCraft aims at full Adobe InDesign parity, and to be better: faster, open (documented JSON
 format + IDML), scriptable by agents (MCP), and available on the web.
@@ -126,6 +126,8 @@ list) · [roadmap.md](docs/roadmap.md) (milestones, plan) · [parity-checklist.m
 [cjk-typography.md](docs/cjk-typography.md) · Arabic: [arabic-typography.md](docs/arabic-typography.md)
 
 ## Progress log
+
+- **2026-10-15 (IDML composition and canvas navigation)** · Typographic extents, last-baseline fit, grid wrapping, Italian hyphenation, contour-based Latin optical spacing and bounded paragraph-fit retries remove overset from all 26 stories on the observed newspaper. Bitmap-only EMF fallbacks render portably and retain their MIME. Canvas scrollbars share the existing view, including rotation and split panes; panel icons remain available, with close buttons and restored placement. Exact paragraph-break parity remains open; no readiness percentage change.
 
 - **2026-10-15 (Text Wrap offsets and outline)** · Properties and the dedicated Text Wrap panel now share four live top/left/bottom/right offset fields, with a link button for equal edits. The selected object's non-printing wrap rectangle uses the composer's exclusion bounds. The Properties ellipsis activates the existing panel through the docking command, including floating/customized layouts. UI, document and composition regressions cover individual/linked edits, undo/redo, persistence, actual reflow and outline visibility. No readiness percentage change.
 

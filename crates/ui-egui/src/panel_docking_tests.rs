@@ -81,6 +81,74 @@ fn drag(h: &mut Harness<'static, DesignApp>, from: Pos2, to: Pos2) {
     h.run_steps(3);
 }
 
+fn click(h: &mut Harness<'_, DesignApp>, pos: Pos2) {
+    h.event(Event::PointerMoved(pos));
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+    }
+}
+
+#[test]
+fn text_wrap_float_has_visible_close_and_resize_controls_and_remembers_size() {
+    let mut app = app();
+    app.run("window.panel.float", json!({"panel":"textWrap","x":60,"y":100})).unwrap();
+    let mut h = harness(app, vec2(1280.0, 800.0));
+    let size = |h: &Harness<'_, DesignApp>| {
+        h.state().ui.docking.as_ref().unwrap().floating.iter().find(|g| g.panels.contains(&"textWrap".into())).unwrap().rect
+    };
+    let before = size(&h);
+    assert_eq!(before[3], 220.0);
+    let grip = h.get_by_label("Resize").rect().center();
+    drag(&mut h, grip, grip + vec2(35.0, -30.0));
+    let after = size(&h);
+    assert!(after[2] > before[2] + 20.0 && after[3] < before[3] - 15.0, "{before:?} -> {after:?}");
+    h.query_all_by_label("Close").find(|node| node.rect().left() < 500.0).unwrap().click();
+    h.run_steps(3);
+    assert!(!h.state().ui.docking.as_ref().unwrap().contains(&"textWrap".into()));
+    h.state_mut().run("window.panel.activate", json!({"panel":"textWrap"})).unwrap();
+    h.run_steps(3);
+    assert_eq!(size(&h), after);
+    let saved = serde_json::to_string(&h.state().ui).unwrap();
+    let restored: crate::UiState = serde_json::from_str(&saved).unwrap();
+    assert_eq!(restored.docking, h.state().ui.docking);
+}
+
+#[test]
+fn utility_icons_remain_visible_and_toggle_without_adding_dock_tabs() {
+    let mut app = app();
+    app.run("window.panel.float", json!({"panel":"textWrap","x":60,"y":100})).unwrap();
+    let mut h = harness(app, vec2(1280.0, 800.0));
+    let rail = |h: &Harness<'_, DesignApp>, label: &str| {
+        h.query_all_by_label(label).find(|n| n.rect().width() < 40.0 && n.rect().height() < 40.0).unwrap().rect().center()
+    };
+    let wrap = rail(&h, "Text Wrap");
+    for expected in [false, true, false, true] {
+        click(&mut h, wrap);
+        h.run_steps(3);
+        assert_eq!(h.state().ui.docking.as_ref().unwrap().contains(&"textWrap".into()), expected);
+        assert_eq!(rail(&h, "Text Wrap"), wrap, "an icon must not move when its panel opens");
+    }
+    let effects = rail(&h, "Effects");
+    click(&mut h, effects);
+    h.run_steps(3);
+    let layout = h.state().ui.docking.as_ref().unwrap();
+    assert!(layout.floating.iter().any(|g| g.panels == ["effects"]));
+    assert!(!group_members_for_test(layout, "properties").contains(&"effects".into()));
+    assert_eq!(rail(&h, "Effects"), effects);
+    // Closing the active dock tab also leaves a route to reopen it.
+    h.state_mut().run("window.panel.activate", json!({"panel":"properties"})).unwrap();
+    h.run_steps(3);
+    h.query_all_by_label("Close").find(|n| n.rect().left() > 900.0).unwrap().click();
+    h.run_steps(3);
+    assert!(!h.state().ui.docking.as_ref().unwrap().contains(&"properties".into()));
+    let properties = rail(&h, "Properties");
+    click(&mut h, properties);
+    h.run_steps(3);
+    assert!(h.state().ui.docking.as_ref().unwrap().contains(&"properties".into()));
+}
+
 #[test]
 fn ordinary_panel_tab_drag_enters_shared_docking_and_can_redock_into_another_tab_group() {
     let mut h = harness(app(), vec2(1280.0, 800.0));

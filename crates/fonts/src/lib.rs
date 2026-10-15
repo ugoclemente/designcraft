@@ -449,6 +449,21 @@ mod tests {
     }
 
     #[test]
+    fn composition_uses_typographic_not_clipping_extents() {
+        let db = FontDb::with_font_dirs(Vec::new());
+        db.set_system_fallback(false);
+        let mut data = testing::font_with("DC Typographic Extents", &['A']).unwrap();
+        for (offset, value) in [(68, 700i16), (70, -200), (74, 1200), (76, 400)] {
+            data = testing::with_table_u16(data, b"OS/2", offset, value as u16).unwrap();
+        }
+        data = testing::with_table_u16(data, b"hhea", 4, 1200).unwrap();
+        data = testing::with_table_u16(data, b"hhea", 6, (-400i16) as u16).unwrap();
+        db.add_font(data);
+        let face = db.face("DC Typographic Extents", "Regular");
+        assert_eq!(face.vertical_metrics(), (700.0, 200.0));
+    }
+
+    #[test]
     fn a_notdef_without_an_outline_is_drawn_as_a_box() {
         let db = FontDb::with_font_dirs(Vec::new());
         db.set_system_fallback(false);

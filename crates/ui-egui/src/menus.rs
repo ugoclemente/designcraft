@@ -83,6 +83,7 @@ pub const UI_COMMANDS: &[(&str, &str, Option<&str>, &str)] = &[
     ("view.actualSize", "Actual Size", Some("Cmd+1"), "{}"),
     ("view.entirePasteboard", "Entire Pasteboard", Some("Cmd+Alt+Shift+0"), "{}"),
     ("view.zoom", "Zoom To", None, "{zoom: 1.0 = 100%}"),
+    ("view.pan", "Pan View", None, "{x?, y?} — canvas origin in document points; does not edit the document"),
     ("view.screenMode", "Screen Mode", None, "{mode: normal|preview|bleed|slug|presentation}"),
     ("view.togglePreview", "Toggle Normal/Preview", Some("W"), "{}"),
     ("view.frameEdges", "Show/Hide Frame Edges", Some("Cmd+H"), "{}"),
@@ -145,6 +146,7 @@ pub const UI_COMMANDS: &[(&str, &str, Option<&str>, &str)] = &[
     ("window.panel.float", "Float Panel", None, "{panel, x?, y?, width?, height?} — detach a panel inside the application window"),
     ("window.panel.dock", "Dock Panel", None, "{panel, anchor?, zone?, before?} — return a floating panel to a dock group"),
     ("window.panel.activate", "Activate Panel", None, "{panel} — show and select a panel in its current group"),
+    ("window.panel.toggle", "Show/Hide Panel", None, "{panel, x?, y?} — toggle a panel from its permanent icon; new utility panels open floating"),
     ("window.panel.close", "Close Panel", None, "{panel} — hide a panel"),
     ("window.dockPanel", "Dock Panel", None, "{panel} — back into the dock's icon column"),
     ("window.controlBar", "Control", Some("Cmd+Alt+6"), "{}"),
@@ -1096,6 +1098,30 @@ pub fn run_ui(app: &mut DesignApp, id: &str, p: &Value) -> Option<Result<Value, 
         "view.zoom" => {
             crate::canvas::set_zoom(app, p.get("zoom").and_then(Value::as_f64).unwrap_or(1.0));
             Ok(Value::Null)
+        }
+        "view.pan" => {
+            let mut origin = match app.view() {
+                Some(v) => v.origin,
+                None => return Some(Err("no document view".into())),
+            };
+            let mut changed = false;
+            for (key, dst) in [("x", &mut origin.x), ("y", &mut origin.y)] {
+                if let Some(value) = p.get(key) {
+                    let Some(value) = value.as_f64().filter(|v| v.is_finite() && v.abs() <= 1e12) else {
+                        return Some(Err(format!("{key} must be a finite canvas coordinate")));
+                    };
+                    *dst = value;
+                    changed = true;
+                }
+            }
+            if !changed {
+                return Some(Err("x or y is required".into()));
+            }
+            if let Some(view) = app.view_mut() {
+                view.origin = origin;
+                view.fitted = true;
+            }
+            Ok(json!({"x":origin.x,"y":origin.y}))
         }
         "view.screenMode" => {
             app.ui.screen_mode = match p.get("mode").and_then(Value::as_str).unwrap_or("normal") {

@@ -812,11 +812,10 @@ fn shape_segment(
     out: &mut Vec<Glyph>,
     vertical: bool,
 ) {
-    let _ = db;
     let (size, k, ascent, descent, leading, cap, xh, shift) = metrics(face, p, auto_leading);
     let hs = p.h_scale;
-    let tracking = p.tracking / 1000.0 * p.size;
-    let manual = if let Kerning::Manual(v) = p.kerning { v / 1000.0 * p.size } else { 0.0 };
+    let tracking = p.tracking / 1000.0 * p.size * if vertical { 1.0 } else { hs };
+    let manual = if let Kerning::Manual(v) = p.kerning { v / 1000.0 * p.size * if vertical { 1.0 } else { hs } } else { 0.0 };
     let src = replacement.unwrap_or(&text[range.clone()]);
     let caps = p.capitalization == Capitalization::AllCaps;
     let feats = features_for(p);
@@ -859,7 +858,26 @@ fn shape_segment(
         };
         let last_in_cluster = gi + 1 == n || shaped[gi + 1].cluster != sg.cluster;
         // Upright: down the line is the shaper's -y, across it (text space -y) its x.
-        let mut adv = if up { -(sg.y_advance as f64) * k_v } else { sg.x_advance as f64 * k * hs };
+        let optical = if !vertical
+            && matches!(p.kerning, Kerning::Optical)
+            && crate::optical::latin(ch)
+            && !sg.rtl
+            && !face.glyph_is_mark(sg.gid)
+            && sg.x_offset == 0
+            && sg.y_offset == 0
+        {
+            shaped
+                .get(gi + 1)
+                .filter(|next| {
+                    next.cluster != sg.cluster
+                        && !next.rtl
+                        && src.get(next.cluster..).and_then(|s| s.chars().next()).is_some_and(crate::optical::latin)
+                })
+                .and_then(|next| crate::optical::advance(db, face, sg.gid, next.gid))
+        } else {
+            None
+        };
+        let mut adv = if up { -(sg.y_advance as f64) * k_v } else { optical.unwrap_or(sg.x_advance as f64) * k * hs };
         let (dx, dy) = if up {
             (-(sg.y_offset as f64) * k_v, -(sg.x_offset as f64) * k * hs)
         } else {

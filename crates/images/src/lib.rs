@@ -8,7 +8,9 @@ use std::sync::{Arc, OnceLock};
 
 pub use resvg::usvg;
 
+mod emf;
 mod eps;
+pub use emf::is_emf;
 mod psd;
 pub use eps::{bounding_box as eps_bounding_box, eps_proxy, is_eps};
 
@@ -33,6 +35,9 @@ pub fn is_svg(bytes: &[u8]) -> bool {
 
 /// MIME type of a placed graphic.
 pub fn mime(bytes: &[u8]) -> &'static str {
+    if is_emf(bytes) {
+        return "image/emf";
+    }
     if is_pdf(bytes) {
         return "application/pdf";
     }
@@ -146,6 +151,9 @@ pub fn natural_size(bytes: &[u8]) -> Option<(f64, f64)> {
 
 /// Pixel dimensions of a raster.
 pub fn pixel_size(bytes: &[u8]) -> Option<(u32, u32)> {
+    if is_emf(bytes) {
+        return emf::decode(bytes).map(|image| image.dimensions());
+    }
     if is_psd(bytes) && bytes.len() >= 26 {
         // Header: signature, version, 6 reserved, channels, height, width (big-endian).
         let be = |i: usize| u32::from_be_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]);
@@ -156,6 +164,9 @@ pub fn pixel_size(bytes: &[u8]) -> Option<(u32, u32)> {
 
 /// Straight (non-premultiplied) RGBA8 of a raster.
 pub fn decode_rgba(bytes: &[u8]) -> Option<image::RgbaImage> {
+    if is_emf(bytes) {
+        return emf::decode(bytes);
+    }
     if is_psd(bytes) {
         return psd::decode(bytes);
     }

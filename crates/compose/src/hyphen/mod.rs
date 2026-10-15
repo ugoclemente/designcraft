@@ -2,6 +2,7 @@
 //! Liang patterns compiled into `hypher`, one cargo feature per language: Spanish is Javier Bezos's
 //! `hyph-es.tex` 5.0 from hyph-utf8, MIT; Portuguese is `hyph-pt.tex` 1.4 from hyph-utf8 (Pedro J.
 //! de Rezende, J. Joao Dias Almeida, Leonardo Araujo, Aline Benevides), BSD-3-Clause (see NOTICE).
+//! Italian uses Claudio Beccari's `hyph-it.tex` patterns, under their MIT option.
 //!
 //! English lookup order for each word:
 //! 1. the **dictionary** ([`Dictionary::en_us`]) — the public-domain Moby Hyphenator II word list
@@ -115,7 +116,7 @@ fn core_breaks(core: &[char], lang: Lang) -> (Vec<usize>, Source) {
         return (vec![], Source::None);
     }
     if let Lang::Patterns(l) = lang {
-        if core.contains(&'\'') {
+        if core.contains(&'\'') && l != hypher::Lang::Italian {
             return (vec![], Source::None);
         }
         let s: String = core.iter().collect();
@@ -305,6 +306,20 @@ fn heuristic_points(c: &[char]) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn italian_uses_italian_syllables_and_respects_limits() {
+        let it = Lang::for_language("Italian").unwrap();
+        assert_eq!(Some(it), Lang::for_language("it_IT"));
+        let points = hyphen_points_in("sostenibilità", &Limits::default(), it);
+        let parts: String =
+            "sostenibilità".chars().enumerate().map(|(i, c)| if points.contains(&i) { format!("-{c}") } else { c.to_string() }).collect();
+        assert_eq!(parts, "so-ste-ni-bi-li-tà");
+        let (points, _) = word_breaks_in("l’ambiente", it);
+        assert!(!points.is_empty());
+        assert!(points.iter().all(|p| *p > 2), "never break at the elision");
+        assert!(hyphen_points_in("sostenibilità", &Limits { min_word: 100, ..Default::default() }, it).is_empty());
+    }
 
     fn h(w: &str) -> String {
         hyphenate_word(w, &Limits::default())

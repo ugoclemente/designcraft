@@ -74,6 +74,179 @@ fn small_frame_oversets() {
 }
 
 #[test]
+fn last_baseline_on_frame_bottom_is_not_overset() {
+    let (mut d, sid, fid) = doc_with(
+        "One\nTwo\nThree\nFour\nFive",
+        Rect::new(0.0, 0.0, 200.0, 50.0),
+        ParaAttrs { grid_align: Some(GridAlign::AllLines), ..Default::default() },
+    );
+    let opts = &mut d.item_mut(fid).unwrap().text_frame_mut().unwrap().options;
+    opts.first_baseline = FirstBaseline::Fixed;
+    opts.first_baseline_min = 10.0;
+    d.settings.baseline_grid.start = 0.0;
+    d.settings.baseline_grid.increment = 10.0;
+    d.story_mut(sid).unwrap().format_chars(0..27, |f| {
+        f.over.size = Some(10.0);
+        f.over.leading = Some(designcraft_doc::Leading::Points(10.0));
+    });
+    let cs = compose_story(&d, sid, &Default::default());
+    let lines = all_lines(&cs);
+    assert_eq!(lines.len(), 5);
+    assert!(!cs.is_overset());
+    assert!((lines[4].baseline - 50.0).abs() < 1e-6);
+    assert!(lines[4].descent > 0.0);
+    let end = d.story(sid).unwrap().text.len();
+    d.story_mut(sid).unwrap().insert(end, "\nSix");
+    assert!(compose_story(&d, sid, &Default::default()).is_overset());
+}
+
+#[test]
+fn wrapping_keeps_first_and_following_baselines_on_the_grid() {
+    let (mut d, sid, _) =
+        doc_with("One\nTwo\nThree", Rect::new(0.0, 0.0, 200.0, 70.0), ParaAttrs { grid_align: Some(GridAlign::AllLines), ..Default::default() });
+    d.settings.baseline_grid.start = 0.0;
+    d.settings.baseline_grid.increment = 10.0;
+    d.story_mut(sid).unwrap().format_chars(0..13, |f| {
+        f.over.size = Some(10.0);
+        f.over.leading = Some(designcraft_doc::Leading::Points(10.0));
+    });
+    let layer = d.default_layer();
+    let (blocker, _) = d.add_text_frame(SpreadRef::Doc(0), Rect::new(0.0, 0.0, 200.0, 23.0), layer, "", ParaFormat::default()).unwrap();
+    d.item_mut(blocker).unwrap().wrap.mode = WrapMode::BoundingBox;
+    let cs = compose_story(&d, sid, &Default::default());
+    let lines = all_lines(&cs);
+    assert_eq!(lines.len(), 3);
+    for l in &lines {
+        assert!((l.baseline / 10.0 - (l.baseline / 10.0).round()).abs() < 1e-6);
+    }
+    for pair in lines.windows(2) {
+        assert!((pair[1].baseline - pair[0].baseline - 10.0).abs() < 1e-6);
+    }
+    assert!(lines[0].baseline - lines[0].ascent >= 23.0);
+    // An exhausted bounded search must never place text inside the obstacle.
+    d.settings.baseline_grid.increment = 0.001;
+    let capped = compose_story(&d, sid, &Default::default());
+    assert!(capped.is_overset());
+    assert!(all_lines(&capped).is_empty());
+}
+
+#[test]
+fn latin_aki_leading_does_not_skip_a_grid_line_when_the_type_size_changes() {
+    let (mut d, sid, fid) =
+        doc_with("Article\nCopyright", Rect::new(0.0, 0.0, 200.0, 20.0), ParaAttrs { grid_align: Some(GridAlign::AllLines), ..Default::default() });
+    d.settings.baseline_grid.start = 0.0;
+    d.settings.baseline_grid.increment = 10.0;
+    let options = &mut d.item_mut(fid).unwrap().text_frame_mut().unwrap().options;
+    options.first_baseline = FirstBaseline::Fixed;
+    options.first_baseline_min = 10.0;
+    d.story_mut(sid).unwrap().format_chars(0..17, |f| {
+        f.over.size = Some(10.0);
+        f.over.leading = Some(designcraft_doc::Leading::Points(10.0));
+        f.over.leading_model = Some(designcraft_doc::cjk::LeadingModel::AkiBelow);
+        f.over.language = Some("Italian".into());
+    });
+    d.story_mut(sid).unwrap().format_chars(8..17, |f| f.over.size = Some(7.0));
+    let cs = compose_story(&d, sid, &Default::default());
+    assert!(!cs.is_overset());
+    assert_eq!(all_lines(&cs).iter().map(|l| l.baseline).collect::<Vec<_>>(), [10.0, 20.0]);
+}
+
+#[test]
+fn horizontal_scaling_scales_tracking_and_manual_kerning_with_the_glyphs() {
+    for kerning in [designcraft_doc::Kerning::None, designcraft_doc::Kerning::Manual(80.0)] {
+        let (mut d, sid, _) = doc_with("nnnn", Rect::new(0.0, 0.0, 500.0, 100.0), ParaAttrs::default());
+        d.story_mut(sid).unwrap().format_chars(0..4, |f| {
+            f.over.kerning = Some(kerning);
+            f.over.tracking = Some(100.0);
+        });
+        let full = compose_story(&d, sid, &Default::default());
+        d.story_mut(sid).unwrap().format_chars(0..4, |f| f.over.h_scale = Some(0.8));
+        let scaled = compose_story(&d, sid, &Default::default());
+        for (a, b) in all_lines(&full)[0].glyphs.iter().zip(&all_lines(&scaled)[0].glyphs) {
+            assert!((b.adv - a.adv * 0.8).abs() < 1e-9);
+        }
+    }
+}
+
+#[test]
+fn optical_kerning_is_applied_to_latin_text_and_scales_with_the_type() {
+    let (mut d, sid, _) = doc_with("AVATAR Printing fine letters", Rect::new(0.0, 0.0, 1000.0, 100.0), ParaAttrs::default());
+    let len = d.story(sid).unwrap().text.len();
+    d.story_mut(sid).unwrap().format_chars(0..len, |f| f.over.kerning = Some(designcraft_doc::Kerning::None));
+    let unkerned = compose_story(&d, sid, &Default::default());
+    d.story_mut(sid).unwrap().format_chars(0..len, |f| f.over.kerning = Some(designcraft_doc::Kerning::Optical));
+    let optical = compose_story(&d, sid, &Default::default());
+    assert!(all_lines(&unkerned)[0].glyphs.iter().zip(&all_lines(&optical)[0].glyphs).any(|(a, b)| (a.adv - b.adv).abs() > 0.01));
+    d.story_mut(sid).unwrap().format_chars(0..len, |f| f.over.h_scale = Some(0.75));
+    let scaled = compose_story(&d, sid, &Default::default());
+    for (a, b) in all_lines(&optical)[0].glyphs.iter().zip(&all_lines(&scaled)[0].glyphs) {
+        assert!((a.adv * 0.75 - b.adv).abs() < 1e-9);
+    }
+}
+
+#[test]
+fn an_overfull_discretionary_hyphen_does_not_discard_a_fitting_whole_word() {
+    let (mut d, sid, _) = doc_with("nnni", Rect::new(0.0, 0.0, 500.0, 100.0), ParaAttrs::default());
+    d.story_mut(sid).unwrap().format_chars(0..4, |f| f.over.kerning = Some(designcraft_doc::Kerning::None));
+    let cs = compose_story(&d, sid, &Default::default());
+    // Shape through the normal style resolution, retaining the internal glyphs.
+    let db = FontDb::global().scoped(d.font_scope);
+    let story = d.story(sid).unwrap();
+    let base = d.styles.resolve_para(&story.paras[0]).1;
+    let mut styles = Vec::new();
+    let mut missing = HashMap::new();
+    let shaped = shape::shape_para(
+        &db,
+        &d.styles,
+        story,
+        0,
+        0..4,
+        &base,
+        shape::TypeEnv { auto_leading: 1.2, adv: Default::default(), glyph_fallback: false },
+        &Default::default(),
+        &mut shape::StyleTable { styles: &mut styles, missing: &mut missing },
+        &[],
+        &[],
+        &[],
+    );
+    let width = all_lines(&cs)[0].end_x - all_lines(&cs)[0].x0;
+    let sp = Spacing::default();
+    let breaks = breaker::knuth_plass(&shaped.glyphs, &[false, false, true, false], &sp, &|_| width);
+    assert_eq!(breaks.len(), 1, "a word that fits must not split to fit an optional hyphen");
+    assert!(!breaks[0].hyphen);
+}
+
+#[test]
+fn paragraph_fitting_retains_the_type_size_and_spacing_limits() {
+    let (mut d, sid, fid) =
+        doc_with(LOREM, Rect::new(0.0, 0.0, 100.0, 17.0 * 14.4), ParaAttrs { align: Some(Align::LeftJustified), ..Default::default() });
+    let opts = &mut d.item_mut(fid).unwrap().text_frame_mut().unwrap().options;
+    opts.first_baseline = FirstBaseline::Fixed;
+    opts.first_baseline_min = 14.4;
+    let frames = frame_specs(&d, sid);
+    let ordinary = compose_mode(&d, d.story(sid).unwrap(), &frames, &Default::default(), FontDb::global(), false);
+    assert!(ordinary.is_overset(), "fixture needs a shorter legal total-fit path");
+    let fitted = compose_story(&d, sid, &Default::default());
+    assert!(!fitted.is_overset());
+    assert_eq!(fitted.line_count(), 17);
+    assert_eq!(d.story(sid).unwrap().text, LOREM);
+    for line in all_lines(&fitted) {
+        for glyph in &line.glyphs {
+            assert!((glyph.sx - 12.0 / glyph.face.upem).abs() < 1e-9, "fitting must not scale the font");
+            if LOREM.get(glyph.byte..).is_some_and(|s| s.starts_with(' ')) {
+                assert!(
+                    glyph.adv >= glyph.face.advance(glyph.face.glyph_for(' ')) * glyph.sx * 0.8 - 1e-7,
+                    "fitting must respect minimum word spacing"
+                );
+            }
+        }
+    }
+    let mut tiny = frames.clone();
+    tiny[0].area.y1 = tiny[0].area.y0 + 28.8;
+    assert!(compose(&d, d.story(sid).unwrap(), &tiny, &Default::default()).is_overset(), "genuine overset remains visible");
+}
+
+#[test]
 fn text_flows_through_threaded_frames() {
     let mut d = Document::new(&NewDocument::default());
     let lid = d.default_layer();
@@ -1348,6 +1521,17 @@ fn only_english_text_gets_english_hyphenation() {
     let n = st.len();
     st.format_chars(0..n, |f| f.over.language = Some("French".into()));
     assert_eq!(hyphenated(&d2, sid), 0, "French isn't hyphenated with English rules");
+}
+
+#[test]
+fn italian_body_copy_hyphenates_without_changing_the_story() {
+    let text = "La sostenibilità ambientale richiede partecipazione responsabilità e collaborazione nella protezione del territorio.";
+    let (mut d, sid, _) = doc_with(text, Rect::new(0.0, 0.0, 100.0, 500.0), ParaAttrs::default());
+    d.story_mut(sid).unwrap().format_chars(0..text.len(), |f| f.over.language = Some("Italian".into()));
+    let cs = compose_story(&d, sid, &Default::default());
+    assert!(!cs.is_overset());
+    assert!(all_lines(&cs).iter().any(|l| l.hyphenated));
+    assert_eq!(d.story(sid).unwrap().text, text);
 }
 
 #[test]

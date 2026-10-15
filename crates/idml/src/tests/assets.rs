@@ -8,6 +8,18 @@ use super::*;
 
 const PHOTO: &str = "file:/photos/wedding%20day/couple.jpg";
 
+#[test]
+fn embedded_emf_keeps_its_format_instead_of_becoming_a_png() {
+    let mut bytes = vec![0; 88];
+    bytes[..4].copy_from_slice(&1u32.to_le_bytes());
+    bytes[40..44].copy_from_slice(b" EMF");
+    let graphic = image(1, "", Some(&bytes)).replace("<Image ", "<WMF ").replace("</Image>", "</WMF>");
+    let imported = import_idml_with(&package(&[frame(1, 0.0, 0.0, &graphic)]), &|_| None).unwrap();
+    let asset = imported.assets.values().next().unwrap();
+    assert_eq!(asset.mime, "image/emf");
+    assert_eq!(asset.data.as_slice(), bytes);
+}
+
 /// A graphic frame at `x` showing `image` (an `<Image>` element) with `crop` on every side.
 fn frame(n: usize, x: f64, crop: f64, image: &str) -> String {
     format!(

@@ -33,6 +33,7 @@ pub enum FormatError {
 fn ext_for(mime: &str) -> &'static str {
     match mime {
         "image/png" => "png",
+        "image/emf" => "emf",
         "image/jpeg" => "jpg",
         "image/gif" => "gif",
         "image/webp" => "webp",

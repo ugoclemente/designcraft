@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use kurbo::BezPath;
 use skrifa::instance::{Location, LocationRef, Size};
 use skrifa::outline::{DrawSettings, OutlinePen};
-use skrifa::raw::FileRef;
+use skrifa::raw::{FileRef, TableProvider};
 use skrifa::string::StringId;
 use skrifa::{GlyphId, MetadataProvider};
 
@@ -677,6 +677,19 @@ fn make_face(bytes: FontBytes, source: FontSource, index: u32, family: String, s
     let settings: Vec<(skrifa::Tag, f32)> = coords.iter().map(|(t, v)| (skrifa::Tag::new(t), *v)).collect();
     let location = if coords.is_empty() { Location::default() } else { f.axes().location(settings.iter().copied()) };
     let m = f.metrics(Size::unscaled(), &location);
+    // Page composition uses typographic extents, not the hhea/Windows clipping
+    // extents selected by Metrics for many legacy fonts. Preserve MVAR deltas.
+    let (ascent, descent) = f
+        .os2()
+        .ok()
+        .and_then(|os2| {
+            let (a, d) = (f64::from(os2.s_typo_ascender()), f64::from(os2.s_typo_descender()));
+            (a > 0.0 && d <= 0.0).then(|| {
+                let base = f.metrics(Size::unscaled(), LocationRef::default());
+                (a + f64::from(m.ascent - base.ascent), -(d + f64::from(m.descent - base.descent)))
+            })
+        })
+        .unwrap_or((f64::from(m.ascent), -f64::from(m.descent)));
     let a = f.attributes();
     let hb = harfrust::FontRef::from_index(data, index).ok()?;
     let shaper = harfrust::ShaperData::new(&hb);
@@ -695,8 +708,8 @@ fn make_face(bytes: FontBytes, source: FontSource, index: u32, family: String, s
         weight,
         italic,
         upem: m.units_per_em.max(1) as f64,
-        ascent: m.ascent as f64,
-        descent: -(m.descent as f64),
+        ascent,
+        descent,
         cap_height: m.cap_height.map(|v| v as f64).filter(|v| *v > 0.0).unwrap_or(m.ascent as f64 * 0.72),
         x_height: m.x_height.map(|v| v as f64).filter(|v| *v > 0.0).unwrap_or(m.ascent as f64 * 0.5),
         shaper,

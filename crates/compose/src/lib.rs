@@ -15,6 +15,7 @@ pub mod breaker;
 mod cache;
 pub mod hyphen;
 mod notes;
+mod optical;
 mod overlay;
 mod ruby;
 pub mod shape;
@@ -462,6 +463,17 @@ pub fn compose(doc: &Document, story: &Story, frames: &[FrameSpec], opts: &Compo
 }
 
 fn compose_with_db(doc: &Document, story: &Story, frames: &[FrameSpec], opts: &ComposeOptions, db: &FontDb) -> ComposedStory {
+    let normal = compose_mode(doc, story, frames, opts, db, false);
+    if let Some(first) = normal.overset_at {
+        let fitted = compose_mode(doc, story, frames, opts, db, true);
+        if fitted.overset_at.is_none_or(|second| second > first) {
+            return fitted;
+        }
+    }
+    normal
+}
+
+fn compose_mode(doc: &Document, story: &Story, frames: &[FrameSpec], opts: &ComposeOptions, db: &FontDb, compact: bool) -> ComposedStory {
     let db = &db.scoped(doc.font_scope);
     let mut out = ComposedStory { story: story.id, rev: story.rev, text_len: story.text.len(), ..Default::default() };
     let mut styles_tab: Vec<RunStyle> = Vec::new();
@@ -904,6 +916,8 @@ fn compose_with_db(doc: &Document, story: &Story, frames: &[FrameSpec], opts: &C
                 breaker::greedy(rest, rest_h, &spacing, &width, &tab)
             } else if pp.balance_ragged && !spacing.justify {
                 breaker::balanced(rest, rest_h, &spacing, &width)
+            } else if compact {
+                breaker::compact(rest, rest_h, &spacing, &width)
             } else {
                 breaker::knuth_plass(rest, rest_h, &spacing, &width)
             };
@@ -918,15 +932,19 @@ fn compose_with_db(doc: &Document, story: &Story, frames: &[FrameSpec], opts: &C
                     baseline += cur.last_reference - reference;
                 }
                 // Baseline grid.
-                if let Some((g_start, inc)) = f.grid
-                    && (pp.grid_align == GridAlign::AllLines || (pp.grid_align == GridAlign::FirstLineOnly && line_no == 0))
-                    && inc > 0.0
-                {
+                let active_grid = f.grid.filter(|(start, inc)| {
+                    start.is_finite()
+                        && inc.is_finite()
+                        && *inc > 0.0
+                        && (pp.grid_align == GridAlign::AllLines || (pp.grid_align == GridAlign::FirstLineOnly && line_no == 0))
+                });
+                if let Some((g_start, inc)) = active_grid {
                     let n = ((baseline - g_start) / inc - 1e-6).ceil();
                     baseline = g_start + n * inc;
                 }
                 // Wrap: push the line down until a slot exists.
                 let (mut x0, mut x1) = (col.x0, col.x1);
+                let mut blocked = false;
                 if !f.exclusions.is_empty() {
                     let mut tries = 0;
                     loop {
@@ -937,9 +955,12 @@ fn compose_with_db(doc: &Document, story: &Story, frames: &[FrameSpec], opts: &C
                                 break;
                             }
                             None => {
-                                baseline += 1.0;
+                                // Wrapping must not move a snapped baseline off
+                                // its grid, leaving an irregular gap to the next.
+                                baseline += active_grid.map_or(1.0, |(_, inc)| inc);
                                 tries += 1;
                                 if baseline > col.y1 || tries > 4000 {
+                                    blocked = true;
                                     break;
                                 }
                             }
@@ -953,7 +974,10 @@ fn compose_with_db(doc: &Document, story: &Story, frames: &[FrameSpec], opts: &C
                 let col_w = cols[cur.fi][cur.col.min(cols[cur.fi].len() - 1)].width();
                 let reserve = notes.reserve(doc, cur.fi, cur.col, &line_notes, col_w, f, opts);
                 let reserve = if cur.last_baseline.is_none() { notes.reserve(doc, cur.fi, cur.col, &[], col_w, f, opts) } else { reserve };
-                let fits = baseline + desc <= col.y1 - reserve + 0.01 && !capped;
+                // The last baseline may sit on the frame bottom; descenders can
+                // extend below it. Footnotes still reserve ink clearance.
+                let bottom = baseline + if reserve > 0.0 { desc } else { 0.0 };
+                let fits = bottom <= col.y1 - reserve + 0.01 && !capped && !blocked;
                 if !fits {
                     if cur.can_next_sub() {
                         g0 = s;
@@ -2032,6 +2056,16 @@ fn cjk_alignment_shift(g: &Glyph, reference: &Glyph) -> f64 {
 fn cjk_line_reference(line: &[Glyph]) -> f64 {
     use designcraft_doc::cjk::LeadingModel as L;
     let Some(g) = line.iter().max_by(|a, b| a.size.total_cmp(&b.size)) else { return 0.0 };
+    // European IDML styles also serialize AkiBelow. Its em-edge reference
+    // belongs to CJK composition; applying it to Latin text shifts a smaller
+    // following line off the baseline grid (for example a copyright notice).
+    if matches!(g.leading_model, L::AkiBelow | L::AkiAbove)
+        && !line
+            .iter()
+            .any(|g| upright_in_vertical(g.ch) || g.lang.is_some_and(|l| matches!(designcraft_doc::language_subtag(l), "ja" | "zh" | "ko")))
+    {
+        return 0.0;
+    }
     let (top, bottom) = cjk_em_box(g);
     match g.leading_model {
         L::Roman => 0.0,

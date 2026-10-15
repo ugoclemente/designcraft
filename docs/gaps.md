@@ -1,6 +1,6 @@
 # Where DesignCraft falls short of InDesign
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (shared print spooler; Windows CI passes) · **Target:** Adobe InDesign 2026 (21.6)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (observed CS6 newspaper composition fixes; broader parity remains unmeasured) · **Target:** Adobe InDesign 2026 (21.6)
 
 Every known shortfall against InDesign 2026, one entry each, ranked by how much it stops an
 InDesign professional from doing real work. This is the work list: agents pick from the top.
@@ -69,9 +69,7 @@ Kind: **F** feature · **U** UI/UX · **T** typography · **FF** file format · 
 ### 4. Composition isn't compared with InDesign (T)
 - **Missing:** an oracle harness: the same synthetic stories set by InDesign 2026 (observed
   black-box, results kept under `plan/`) and by DesignCraft, comparing line breaks, overset and
-  frame fit. Known differences: optical kerning falls back to metrics, so imported text sets
-  wider (#181); a frame goes overset when descenders don't fit, InDesign needs only the baseline
-  (#180); setting the text language was missing (#130; Language is now in Properties, #145, the issue is still open); "hyphenation doesn't work"
+  frame fit. Latin optical kerning now uses glyph contours (#181), while other scripts and mixed-style boundaries still need optical-spacing coverage. Last-baseline fit (#180), typographic font metrics, wrapped baseline-grid alignment and Italian hyphenation are corrected; total-fit composition retains alternatives by line count and retries more compact legal breaks on overset. The observed newspaper now fits all 26 stories, but broader line-break parity remains unmeasured. Setting the text language was missing (#130; Language is now in Properties, #145, the issue is still open); "hyphenation doesn't work"
   (#87).
 - **Impact:** an opened IDML reflows: different line breaks, different page count, overset text.
   Professionals notice on the first page.
@@ -135,7 +133,7 @@ Kind: **F** feature · **U** UI/UX · **T** typography · **FF** file format · 
 - **Estimate:** 25–40 h.
 
 ### 13. Hyphenation and spelling languages (T, L)
-- **Missing:** hyphenation patterns for every language but English and Spanish; spelling for
+- **Missing:** hyphenation patterns for languages beyond English, Spanish, Portuguese and Italian; spelling for
   every language but English. InDesign ships dictionaries for ~40 languages.
 - **Estimate:** 30–60 h (permissively licensed patterns exist for most; spelling word lists need
   licence review). **Doc:** [typography-parity.md](typography-parity.md)
