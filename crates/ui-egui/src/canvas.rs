@@ -258,6 +258,28 @@ pub fn show(app: &mut DesignApp, ui: &mut egui::Ui) {
         let r = xf.rect(slot.bounds);
         painter.rect_filled(r.translate(vec2(1.5, 1.5)), 0.0, Color32::BLACK);
     }
+    if background_in_back(app, &doc, &xf, preview) {
+        // Paper and the selected non-printing decorations go below transparent content.
+        // Selection and interactive feedback remain foreground overlays.
+        let paper = doc.resolve_color(designcraft_color::swatch::PAPER, 1.0).unwrap_or(designcraft_color::Color::WHITE).to_rgba8(1.0);
+        let paper = Color32::from_rgba_unmultiplied(paper[0], paper[1], paper[2], paper[3]);
+        for slot in &layout.slots {
+            let Some(spread) = doc.spread(slot.spread) else { continue };
+            if spread.pages.windows(2).all(|w| w[0].height == w[1].height) {
+                painter.rect_filled(xf.rect(slot.bounds), 0.0, paper);
+            } else {
+                for page in &spread.pages {
+                    painter.rect_filled(xf.rect(slot.xf.transform_rect_bbox(page.bounds())), 0.0, paper);
+                }
+            }
+        }
+        if grids_in_back(app, &doc, &xf, preview) {
+            draw_grids(app, &painter, &xf, &doc, &layout);
+        }
+        if guides_in_back(app, preview) {
+            draw_guides(app, &painter, &xf, &doc, &layout, &t);
+        }
+    }
     // Rendered content.
     render_texture(app, ui.ctx(), rect, &xf, &layout, preview);
     if let (Some(tex), Some(sh)) = (&app.canvas.texture, app.canvas.shown) {
@@ -292,7 +314,12 @@ pub fn show(app: &mut DesignApp, ui: &mut egui::Ui) {
         painter.rect_stroke(xf.rect(slot.bounds), 0.0, Stroke::new(hair, Color32::from_rgb(0x4a, 0x4a, 0x4a)), StrokeKind::Outside);
     }
     if !preview {
-        draw_guides(app, &painter, &xf, &doc, &layout, &t);
+        if !doc.settings.grid.in_back {
+            draw_grids(app, &painter, &xf, &doc, &layout);
+        }
+        if !app.session.prefs.guides_in_back {
+            draw_guides(app, &painter, &xf, &doc, &layout, &t);
+        }
         if let Some(g) = ui.data(|d| d.get_temp::<GuideDrag>(egui::Id::new(GUIDE_DRAG)))
             && let Some(p) = g.at
         {
@@ -303,7 +330,6 @@ pub fn show(app: &mut DesignApp, ui: &mut egui::Ui) {
             };
             painter.line_segment([a, b], Stroke::new(1.0, col));
         }
-        draw_frames(app, &painter, &xf, &doc, &layout);
         if app.ui.hidden_characters {
             draw_hidden_characters(app, &painter, &xf, &doc, &layout);
         }
@@ -370,7 +396,9 @@ fn cursor_icon(c: Cursor) -> egui::CursorIcon {
 fn render_texture(app: &mut DesignApp, ctx: &egui::Context, rect: Rect, xf: &Xf, layout: &CanvasLayout, preview: bool) {
     let Some(st) = app.session.active() else { return };
     let ppp = ctx.pixels_per_point() as f64;
-    let doc_key = (st.uid, std::sync::Arc::as_ptr(&st.doc) as u64, st.revision, preview);
+    let in_back = background_in_back(app, &st.doc, xf, preview);
+    let edges = if preview || !app.ui.frame_edges { 0 } else { 1 | (u8::from(app.ui.tagged_frames) << 1) };
+    let doc_key = (st.uid, std::sync::Arc::as_ptr(&st.doc) as u64, st.revision, preview, in_back, edges);
     // Overscan: 25% of the viewport on every side, within the GPU's maximum texture size.
     let max_side = ctx.input(|i| i.max_texture_side) as f32 / ppp as f32;
     let (ow, oh) =
@@ -415,6 +443,8 @@ fn render_texture(app: &mut DesignApp, ctx: &egui::Context, rect: Rect, xf: &Xf,
         let h = (target.size.1 as f64 * ppp).round().max(1.0) as u32;
         let view = Affine::scale(ppp) * Affine::scale(xf.zoom) * Affine::translate((-target.origin.x, -target.origin.y));
         let opts = designcraft_render::RenderOptions {
+            paper: !in_back,
+            frame_edges: display_frame_edges(app, ppp, preview),
             printing_only: preview,
             greek_below_px: 3.0 * ppp,
             highlight_missing_fonts: !preview && app.session.prefs.highlight_substituted_fonts,
@@ -448,7 +478,11 @@ fn render_texture(app: &mut DesignApp, ctx: &egui::Context, rect: Rect, xf: &Xf,
     if doc_changed && zoom_same && patch_texture(app, layout, ppp, doc_key, preview) {
         return;
     }
-    if !has_worker || app.canvas.shown.is_none() || (doc_changed && zoom_same) {
+    if !has_worker
+        || app.canvas.shown.is_none()
+        || (doc_changed && zoom_same)
+        || app.canvas.shown.is_some_and(|s| s.doc.4 != in_back || s.doc.5 != edges)
+    {
         let t0 = crate::now_ms();
         let Some((doc, placed, w, h, view, opts)) = job(app) else { return };
         let img = app.canvas.renderer.render(&doc, &app.session.cache, &placed, w, h, view, &opts);
@@ -484,9 +518,9 @@ fn render_texture(app: &mut DesignApp, ctx: &egui::Context, rect: Rect, xf: &Xf,
 
 /// Repaint only the damaged regions of the current texture after an edit (typing, nudging).
 /// Returns false when a full render is needed (view moved, too much changed, or damage unknown).
-fn patch_texture(app: &mut DesignApp, layout: &CanvasLayout, ppp: f64, doc_key: (u64, u64, u64, bool), preview: bool) -> bool {
+fn patch_texture(app: &mut DesignApp, layout: &CanvasLayout, ppp: f64, doc_key: (u64, u64, u64, bool, bool, u8), preview: bool) -> bool {
     let (Some(sh), Some(old), Some(st)) = (app.canvas.shown, app.canvas.shown_doc.clone(), app.session.active()) else { return false };
-    if sh.doc.0 != doc_key.0 || sh.doc.3 != doc_key.3 || app.canvas.texture.is_none() {
+    if sh.doc.0 != doc_key.0 || sh.doc.3 != doc_key.3 || sh.doc.4 != doc_key.4 || sh.doc.5 != doc_key.5 || app.canvas.texture.is_none() {
         return false;
     }
     let new = st.doc.clone();
@@ -494,13 +528,14 @@ fn patch_texture(app: &mut DesignApp, layout: &CanvasLayout, ppp: f64, doc_key: 
     let t0 = crate::now_ms();
     let (tw, th) = ((sh.size.0 as f64 * ppp).round() as i64, (sh.size.1 as f64 * ppp).round() as i64);
     let k = sh.zoom * ppp;
+    let edge_margin = if doc_key.5 & 2 != 0 { (1.25 * ppp).ceil().max(1.0) as i64 } else { 1 };
     let mut px: Option<(i64, i64, i64, i64)> = None;
     for (r, rect) in &regions {
         let c = layout.xf(*r).transform_rect_bbox(*rect);
-        let x0 = ((c.x0 - sh.origin.x) * k).floor() as i64 - 1;
-        let y0 = ((c.y0 - sh.origin.y) * k).floor() as i64 - 1;
-        let x1 = ((c.x1 - sh.origin.x) * k).ceil() as i64 + 1;
-        let y1 = ((c.y1 - sh.origin.y) * k).ceil() as i64 + 1;
+        let x0 = (((c.x0 - sh.origin.x) * k).floor() as i64).saturating_sub(edge_margin);
+        let y0 = (((c.y0 - sh.origin.y) * k).floor() as i64).saturating_sub(edge_margin);
+        let x1 = (((c.x1 - sh.origin.x) * k).ceil() as i64).saturating_add(edge_margin);
+        let y1 = (((c.y1 - sh.origin.y) * k).ceil() as i64).saturating_add(edge_margin);
         px = Some(px.map_or((x0, y0, x1, y1), |p| (p.0.min(x0), p.1.min(y0), p.2.max(x1), p.3.max(y1))));
     }
     let done = |app: &mut DesignApp| {
@@ -528,6 +563,8 @@ fn patch_texture(app: &mut DesignApp, layout: &CanvasLayout, ppp: f64, doc_key: 
         * Affine::scale(sh.zoom)
         * Affine::translate((-sh.origin.x, -sh.origin.y));
     let opts = designcraft_render::RenderOptions {
+        paper: !doc_key.4,
+        frame_edges: display_frame_edges(app, ppp, preview),
         printing_only: preview,
         greek_below_px: 3.0 * ppp,
         highlight_missing_fonts: !preview && app.session.prefs.highlight_substituted_fonts,
@@ -583,6 +620,43 @@ fn dashed(painter: &egui::Painter, a: Pos2, b: Pos2, stroke: Stroke, dash: f32, 
     painter.extend(egui::Shape::dashed_line(&[a, b], stroke, dash, gap));
 }
 
+fn display_frame_edges(app: &DesignApp, ppp: f64, preview: bool) -> Option<designcraft_render::FrameEdges> {
+    (!preview && app.ui.frame_edges).then_some(designcraft_render::FrameEdges { scale: ppp, tagged: app.ui.tagged_frames })
+}
+
+fn grids_in_back(app: &DesignApp, doc: &Document, xf: &Xf, preview: bool) -> bool {
+    !preview && doc.settings.grid.in_back && app.ui.guides && app.ui.baseline_grid && xf.zoom >= doc.settings.baseline_grid.view_threshold
+}
+
+fn guides_in_back(app: &DesignApp, preview: bool) -> bool {
+    !preview && app.ui.guides && app.session.prefs.guides_in_back
+}
+
+fn background_in_back(app: &DesignApp, doc: &Document, xf: &Xf, preview: bool) -> bool {
+    grids_in_back(app, doc, xf, preview) || guides_in_back(app, preview)
+}
+
+fn draw_grids(app: &DesignApp, painter: &egui::Painter, xf: &Xf, doc: &Document, layout: &CanvasLayout) {
+    if !app.ui.guides || !app.ui.baseline_grid || xf.zoom < doc.settings.baseline_grid.view_threshold {
+        return;
+    }
+    let grid = &doc.settings.baseline_grid;
+    for slot in &layout.slots {
+        let Some(spread) = doc.spread(slot.spread) else { continue };
+        for page in &spread.pages {
+            let bounds = page.bounds();
+            let mut y = grid.start;
+            while y < page.height {
+                painter.line_segment(
+                    [xf.to_screen(slot.xf * Point::new(bounds.x0, bounds.y0 + y)), xf.to_screen(slot.xf * Point::new(bounds.x1, bounds.y0 + y))],
+                    Stroke::new(hair(painter), c32(grid.color).gamma_multiply(0.8)),
+                );
+                y += grid.increment.max(1.0);
+            }
+        }
+    }
+}
+
 fn draw_guides(app: &DesignApp, painter: &egui::Painter, xf: &Xf, doc: &Document, layout: &CanvasLayout, t: &Tokens) {
     let s = &doc.settings;
     for slot in &layout.slots {
@@ -607,18 +681,6 @@ fn draw_guides(app: &DesignApp, painter: &egui::Painter, xf: &Xf, doc: &Document
             let pr = p.bounds();
             if !app.ui.guides {
                 continue;
-            }
-            // Baseline grid.
-            if app.ui.baseline_grid && xf.zoom >= s.baseline_grid.view_threshold {
-                let g = &s.baseline_grid;
-                let mut y = g.start;
-                while y < p.height {
-                    painter.line_segment(
-                        [pt(Point::new(pr.x0, pr.y0 + y)), pt(Point::new(pr.x1, pr.y0 + y))],
-                        Stroke::new(hair(painter), c32(g.color).gamma_multiply(0.8)),
-                    );
-                    y += g.increment.max(1.0);
-                }
             }
             // Margins (magenta) and columns (violet).
             painter.rect_stroke(rect(p.margin_rect()), 0.0, Stroke::new(hair(painter), c32(s.margin_color)), StrokeKind::Middle);
@@ -691,84 +753,6 @@ fn path_screen(it: &Item, xf: &Xf, a: Affine) -> Vec<Vec<Pos2>> {
         out.push(cur);
     }
     out
-}
-
-fn draw_frames(app: &DesignApp, painter: &egui::Painter, xf: &Xf, doc: &Document, layout: &CanvasLayout) {
-    if !app.ui.frame_edges {
-        return;
-    }
-    for slot in &layout.slots {
-        let Some(sp) = doc.spread(slot.spread) else { continue };
-        let a = slot.xf;
-        // Parent items on document pages: dotted edges.
-        if let SpreadRef::Doc(si) = slot.spread {
-            let first = doc.first_page_of_spread(si);
-            for (pi, page) in sp.pages.iter().enumerate() {
-                let Some((ppi, ppg)) = doc.parent_page_for(first + pi) else { continue };
-                let parent = &doc.parents[ppi];
-                let dx = page.x - parent.pages[ppg].x;
-                for it in &parent.items {
-                    if (parent.pages.len() > 1 && parent.page_at_x(it.bounds().center().x) != Some(ppg)) || page.overridden.contains(&it.id) {
-                        continue;
-                    }
-                    let col = doc.layer(it.layer).map(|l| c32(l.color)).unwrap_or(Color32::LIGHT_BLUE);
-                    for poly in path_screen(it, xf, a * Affine::translate((dx, 0.0))) {
-                        for w in poly.windows(2) {
-                            dashed(painter, w[0], w[1], Stroke::new(hair(painter), col.gamma_multiply(0.8)), 2.0, 2.0);
-                        }
-                    }
-                }
-            }
-        }
-        for it in &sp.items {
-            draw_item_edges(painter, xf, doc, it, a);
-        }
-        // Tagged frames in their tag's colour.
-        if app.ui.tagged_frames {
-            for top in &sp.items {
-                top.walk(&mut |it: &Item| {
-                    if it.xml_tag.is_empty() {
-                        return;
-                    }
-                    let Some(t) = doc.xml.tags.iter().find(|t| t.name == it.xml_tag) else { return };
-                    let col = Color32::from_rgb(t.color[0], t.color[1], t.color[2]);
-                    for poly in path_screen(it, xf, a) {
-                        for w in poly.windows(2) {
-                            painter.line_segment([w[0], w[1]], Stroke::new(2.5, col));
-                        }
-                    }
-                });
-            }
-        }
-    }
-}
-
-fn draw_item_edges(painter: &egui::Painter, xf: &Xf, doc: &Document, it: &Item, a: Affine) {
-    if it.hidden || doc.layer(it.layer).is_some_and(|l| !l.visible) {
-        return;
-    }
-    let col = doc.layer(it.layer).map(|l| c32(l.color)).unwrap_or(Color32::LIGHT_BLUE);
-    if let Content::Group { items } = &it.content {
-        for c in items {
-            draw_item_edges(painter, xf, doc, c, a * it.xf);
-        }
-        return;
-    }
-    // Frames without a stroke show their edge; shapes with strokes are visible already.
-    let show = it.stroke.is_none() || matches!(it.content, Content::Text(_) | Content::Graphic(_));
-    if show {
-        for poly in path_screen(it, xf, a) {
-            painter.add(egui::Shape::line(poly, Stroke::new(hair(painter), col.gamma_multiply(0.75))));
-        }
-    }
-    // Empty graphic frame: the X.
-    if it.object_style == designcraft_doc::BASIC_GRAPHICS_FRAME && matches!(it.content, Content::Unassigned) {
-        let r = it.inner_bounds();
-        let m = a * it.xf;
-        let p = |x: f64, y: f64| xf.to_screen(m * Point::new(x, y));
-        painter.line_segment([p(r.x0, r.y0), p(r.x1, r.y1)], Stroke::new(hair(painter), col.gamma_multiply(0.75)));
-        painter.line_segment([p(r.x1, r.y0), p(r.x0, r.y1)], Stroke::new(hair(painter), col.gamma_multiply(0.75)));
-    }
 }
 
 fn layer_color(doc: &Document, it: &Item) -> Color32 {
@@ -1751,6 +1735,10 @@ mod tests {
 
     use super::*;
 
+    // Keep offscreen device lifetimes separate through harness teardown. Concurrent pixel
+    // tests triggered STATUS_HEAP_CORRUPTION on the Windows test host.
+    static PIXEL_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn harness(app: DesignApp) -> Harness<'static, DesignApp> {
         let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
             |ui, app: &mut DesignApp| {
@@ -1793,6 +1781,153 @@ mod tests {
             }
             h.step();
         }
+    }
+
+    #[test]
+    fn frame_edges_hide_beneath_images_except_the_selected_frame() {
+        let _gpu_guard = PIXEL_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        for content in ["text", "graphic"] {
+            let mut app = DesignApp::new(designcraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"pages": 1})).unwrap();
+            let lower = app.run("frame.create", json!({"rect": [72, 72, 272, 272], "content": content})).unwrap();
+            app.run("edit.deselectAll", json!({})).unwrap();
+            let image = app.run("file.place", json!({"base64": "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMDAiIGhlaWdodD0iMTAwIj48cmVjdCB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgZmlsbD0icmVkIi8+PC9zdmc+", "name": "synthetic.svg", "x": 150, "y": 100, "width": 180})).unwrap();
+            assert_ne!(lower["id"], image["id"], "the test requires two overlapping frames, not image replacement");
+            app.run("edit.deselectAll", json!({})).unwrap();
+            app.ui.guides = false;
+            let mut h = harness(app);
+            let blue_at = |h: &mut Harness<'_, DesignApp>| {
+                let app = h.state();
+                let xf = Xf::new(app.canvas_rect.unwrap(), app.view().unwrap());
+                let p = xf.to_screen(app.session.layout().xf(SpreadRef::Doc(0)) * Point::new(272.0, 200.0));
+                let image = h.render().unwrap();
+                (0..3).map(|dx| image.get_pixel((p.x.round() as u32).saturating_sub(1) + dx, p.y.round() as u32).0[2]).max().unwrap()
+            };
+            assert!(blue_at(&mut h) < 10, "a non-selected frame must be covered by the image");
+            h.state_mut().run("selection.set", json!({"ids": [lower["id"]]})).unwrap();
+            h.run_steps(3);
+            assert!(blue_at(&mut h) > 100, "the selected frame's full outline must remain in front");
+            h.state_mut().run("edit.deselectAll", json!({})).unwrap();
+            h.run_steps(3);
+            assert!(blue_at(&mut h) < 10);
+            h.state_mut().run("object.arrange", json!({"ids": [lower["id"]], "to": "front"})).unwrap();
+            h.run_steps(3);
+            assert!(blue_at(&mut h) > 30, "reordering must immediately expose the frame edge");
+            assert!(h.state().canvas.patches > 0);
+            h.state_mut().ui.frame_edges = false;
+            h.run_steps(3);
+            assert!(blue_at(&mut h) < 10, "Hide Frame Edges must invalidate the cached texture");
+            h.state_mut().ui.frame_edges = true;
+            h.run_steps(3);
+            assert!(blue_at(&mut h) > 30);
+            h.state_mut().run("object.arrange", json!({"ids": [image["id"]], "to": "front"})).unwrap();
+            h.run_steps(3);
+            assert!(blue_at(&mut h) < 10);
+        }
+    }
+
+    #[test]
+    fn guides_in_back_puts_margins_columns_and_ruler_guides_under_content_independently_of_grids() {
+        let _gpu_guard = PIXEL_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut app = DesignApp::new(designcraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"pages": 1, "columns": 2})).unwrap();
+        app.run("frame.create", json!({"rect": [0, 0, 550, 400]})).unwrap();
+        app.run("object.fill", json!({"swatch": "C=0 M=100 Y=0 K=0"})).unwrap();
+        app.run("guide.add", json!({"orientation": "vertical", "position": 120, "page": 0})).unwrap();
+        app.run("edit.deselectAll", json!({})).unwrap();
+        app.run("document.preferences", json!({"baselineGrid": {"start": 0, "increment": 20, "viewThreshold": 0, "color": [0, 255, 0]}, "marginColor": [0, 255, 0], "columnColor": [0, 255, 0], "grid": {"inBack": false}})).unwrap();
+        app.ui.baseline_grid = true;
+        app.ui.frame_edges = false;
+        let page = &app.session.doc().unwrap().doc.spreads[0].pages[0];
+        let probes = [Point::new(page.margin_rect().x0, 205.0), Point::new(page.column_rects()[0].x1, 205.0), Point::new(120.0, 205.0)];
+        let mut h = harness(app);
+        let green_at = |h: &mut Harness<'_, DesignApp>, point: Point| {
+            let app = h.state();
+            let xf = Xf::new(app.canvas_rect.unwrap(), app.view().unwrap());
+            let p = xf.to_screen(app.session.layout().xf(SpreadRef::Doc(0)) * point);
+            let image = h.render().unwrap();
+            let x = (p.x.round() as u32).saturating_sub(1);
+            let y = (p.y.round() as u32).saturating_sub(1);
+            (0..3).flat_map(|dx| (0..3).map(move |dy| (dx, dy))).map(|(dx, dy)| image.get_pixel(x + dx, y + dy).0[1]).max().unwrap()
+        };
+        let front = probes.map(|p| green_at(&mut h, p));
+        let grid_front = green_at(&mut h, Point::new(200.0, 100.0));
+        for (grid_back, guide_back) in [(true, false), (false, true), (true, true), (false, false)] {
+            h.state_mut().run("document.preferences", json!({"grid": {"inBack": grid_back}})).unwrap();
+            h.state_mut().run("prefs.set", json!({"guidesInBack": guide_back})).unwrap();
+            h.run_steps(3);
+            for (point, expected_front) in probes.into_iter().zip(front) {
+                let green = green_at(&mut h, point);
+                if guide_back {
+                    assert!(green.saturating_add(30) < expected_front, "guide at {point:?} remains over content");
+                } else {
+                    assert!(green.abs_diff(expected_front) < 5, "foreground guides changed with grid preference");
+                }
+            }
+            let grid = green_at(&mut h, Point::new(200.0, 100.0));
+            if grid_back {
+                assert!(grid.saturating_add(30) < grid_front);
+            } else {
+                assert!(grid.abs_diff(grid_front) < 5, "grid preference must remain independent");
+            }
+            assert!(green_at(&mut h, Point::new(120.0, 450.0)) > 150, "ruler guide must remain visible on blank paper");
+        }
+    }
+
+    #[test]
+    fn grids_in_back_occlude_under_content_and_refresh_without_reopening() {
+        let _gpu_guard = PIXEL_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut app = DesignApp::new(designcraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"pages": 1})).unwrap();
+        app.run("frame.create", json!({"rect": [72, 72, 272, 272]})).unwrap();
+        app.run("object.fill", json!({"swatch": "C=0 M=100 Y=0 K=0"})).unwrap();
+        app.run("edit.deselectAll", json!({})).unwrap();
+        app.run(
+            "document.preferences",
+            json!({"baselineGrid": {"start": 0, "increment": 20, "viewThreshold": 0, "color": [0, 255, 0]}, "grid": {"inBack": false}}),
+        )
+        .unwrap();
+        app.ui.baseline_grid = true;
+        app.ui.frame_edges = false;
+        let mut h = harness(app);
+        let color_at = |h: &mut Harness<'_, DesignApp>, x: f64, y: f64| {
+            let app = h.state();
+            let xf = Xf::new(app.canvas_rect.unwrap(), app.view().unwrap());
+            let p = xf.to_screen(app.session.layout().xf(SpreadRef::Doc(0)) * Point::new(x, y));
+            let image = h.render().unwrap();
+            // A line may land between pixels: inspect its antialiasing footprint.
+            (0..3).map(|dy| image.get_pixel(p.x.round() as u32, (p.y.round() as u32).saturating_sub(1) + dy).0).min_by_key(|c| c[0]).unwrap()
+        };
+        let front = color_at(&mut h, 100.0, 100.0);
+        h.state_mut().run("document.preferences", json!({"grid": {"inBack": true}})).unwrap();
+        h.run_steps(3);
+        let back = color_at(&mut h, 100.0, 100.0);
+        assert!(back[1].saturating_add(30) < front[1], "background grid must be hidden by an opaque object: front={front:?}, back={back:?}");
+        let blank = color_at(&mut h, 400.0, 100.0);
+        assert!(blank[1] > 200 && blank[0] < 230, "paper and grid must remain visible outside the object: {blank:?}");
+        assert!(h.state().canvas.shown.unwrap().doc.4);
+        h.state_mut().run("document.preferences", json!({"grid": {"inBack": false}})).unwrap();
+        h.run_steps(3);
+        assert!(color_at(&mut h, 100.0, 100.0)[1] > back[1].saturating_add(30));
+        assert!(!h.state().canvas.shown.unwrap().doc.4);
+        h.state_mut().run("document.preferences", json!({"grid": {"inBack": true}})).unwrap();
+        h.run_steps(3);
+        // Small document edits exercise the partial texture repaint path.
+        h.state_mut().run("frame.create", json!({"rect": [80, 80, 120, 120]})).unwrap();
+        h.state_mut().run("object.fill", json!({"swatch": "C=0 M=100 Y=0 K=0"})).unwrap();
+        h.state_mut().run("edit.deselectAll", json!({})).unwrap();
+        h.run_steps(3);
+        let on_line = color_at(&mut h, 100.0, 100.0);
+        let off_line = color_at(&mut h, 100.0, 104.0);
+        assert!(on_line[1].abs_diff(off_line[1]) < 5, "partial repaint exposed grid through an opaque object: {on_line:?} vs {off_line:?}");
+        assert!(h.state().canvas.patches > 0);
+        h.state_mut().ui.baseline_grid = false;
+        h.run_steps(3);
+        assert!(!h.state().canvas.shown.unwrap().doc.4);
+        h.state_mut().ui.baseline_grid = true;
+        h.state_mut().ui.screen_mode = ScreenMode::Preview;
+        h.run_steps(3);
+        assert!(!h.state().canvas.shown.unwrap().doc.4);
     }
 
     #[test]

@@ -2605,6 +2605,7 @@ const TABLE: &[(&str, [&str; 5])] = &[
         ],
     ),
     ("Grids in Back", ["Grids in Back", "Grids in Back", "Grids in Back", "Grids in Back", "网格置于后方"]),
+    ("Guides in Back", ["Guides in Back"; 5]),
     ("H&J Violations", ["H&J Violations", "H&J Violations", "H&J Violations", "H&J Violations", "断字与对齐违规"]),
     ("Include Bleed", ["Include Bleed", "Include Bleed", "Include Bleed", "Include Bleed", "包含出血"]),
     ("Include Stroke Weight", ["Include Stroke Weight", "Include Stroke Weight", "Include Stroke Weight", "Include Stroke Weight", "包含描边粗细"]),

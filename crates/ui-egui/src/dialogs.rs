@@ -1005,6 +1005,7 @@ fn preferences(app: &crate::DesignApp, ui: &mut egui::Ui, d: &mut Dialog, max_he
                             ui.end_row();
                         }
                     });
+                    check(ui, d, "guidesInBack", crate::i18n::tr(&app.ui.language, "Guides in Back"));
                     ui.add_space(6.0);
                     ui.label(crate::rtl::widget(
                         ui,
@@ -1991,6 +1992,7 @@ pub fn confirm(app: &mut DesignApp) -> Result<Value, String> {
                 "prefs.set",
                 json!({"scaleStrokes": d.b("scaleStrokes"), "dimensionsIncludeStroke": d.b("dimensionsIncludeStroke"), "transformationsAreTotals": d.b("transformationsAreTotals"), "absolutePageNumbers": d.b("absolutePageNumbers"), "highlightHj": d.b("highlightHj"), "highlightKeeps": d.b("highlightKeeps"), "highlightCustomTracking": d.b("highlightCustomTracking"), "highlightSubstitutedFonts": d.b("highlightSubstitutedFonts"), "richBlackOutput": d.b("richBlackOutput"), "typographersQuotes": d.b("typographersQuotes"), "showFontNamesInEnglish": d.b("showFontNamesInEnglish"), "smartTextReflow": d.b("smartTextReflow"),
                     "doubleClickTextEdit": d.b("doubleClickTextEdit"),
+                    "guidesInBack": d.b("guidesInBack"),
                     "autocorrect": d.b("autocorrect"), "showAddedText": d.b("showAddedText"), "showNoteAnchors": d.b("showNoteAnchors"),
                     "recoveryMinutes": d.n("recoveryMinutes").unwrap_or(0.5),
                     "autocorrectList": d.s("autocorrectText").lines().filter_map(|l| {
@@ -3859,6 +3861,56 @@ mod tests {
         for expected in ["Document Recovery Data", "Save recovery data every:", "OK", "Cancel"] {
             visible_label(&labels, screen, expected);
         }
+    }
+
+    #[test]
+    fn italian_guides_in_back_checkbox_updates_persistent_preferences() {
+        let mut app = DesignApp::new(designcraft_engine::Session::new(), crate::Services::default());
+        app.ui.language = "it".into();
+        app.run("app.preferences", json!({})).unwrap();
+        app.ui.dialog.as_mut().unwrap().fields.insert("section".into(), json!("guides"));
+        let ctx = dialog_context("it");
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0));
+        for _ in 0..3 {
+            dialog_frame(&mut app, &ctx, screen, vec![]);
+        }
+        let labels = dialog_frame(&mut app, &ctx, screen, vec![]);
+        let checkbox = visible_label(&labels, screen, "Guide sotto");
+        click_dialog(&mut app, &ctx, screen, checkbox.center());
+        assert!(app.ui.dialog.as_ref().unwrap().b("guidesInBack"));
+        let labels = dialog_frame(&mut app, &ctx, screen, vec![]);
+        let ok = visible_label(&labels, screen, crate::i18n::tr("it", "OK"));
+        click_dialog(&mut app, &ctx, screen, ok.center());
+        assert!(app.ui.dialog.is_none());
+        assert!(app.session.prefs.guides_in_back);
+        app.run("app.preferences", json!({})).unwrap();
+        assert!(app.ui.dialog.as_ref().unwrap().b("guidesInBack"));
+        assert_eq!(crate::i18n::tr("de", "Guides in Back"), "Guides in Back");
+    }
+
+    #[test]
+    fn italian_grids_in_back_checkbox_updates_document_preferences() {
+        let mut app = DesignApp::new(designcraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({})).unwrap();
+        app.ui.language = "it".into();
+        app.run("app.preferences", json!({})).unwrap();
+        app.ui.dialog.as_mut().unwrap().fields.insert("section".into(), json!("grids"));
+        let ctx = dialog_context("it");
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0));
+        for _ in 0..3 {
+            dialog_frame(&mut app, &ctx, screen, vec![]);
+        }
+        let labels = dialog_frame(&mut app, &ctx, screen, vec![]);
+        let checkbox = visible_label(&labels, screen, "Griglie sullo sfondo");
+        click_dialog(&mut app, &ctx, screen, checkbox.center());
+        assert!(!app.ui.dialog.as_ref().unwrap().b("grid.inBack"));
+        let labels = dialog_frame(&mut app, &ctx, screen, vec![]);
+        let ok = visible_label(&labels, screen, crate::i18n::tr("it", "OK"));
+        click_dialog(&mut app, &ctx, screen, ok.center());
+        assert!(app.ui.dialog.is_none());
+        assert!(!app.session.doc().unwrap().doc.settings.grid.in_back);
+        app.run("app.preferences", json!({})).unwrap();
+        assert!(!app.ui.dialog.as_ref().unwrap().b("grid.inBack"));
     }
 
     #[test]

@@ -1,8 +1,8 @@
 //! DesignCraft renderer: spreads → premultiplied RGBA pixels with `vello_cpu`.
 //!
-//! The renderer draws *document content only* (paper, page items, parent items, composed text,
-//! placed images). Non-printing chrome — guides, frame edges, ports, selection — is drawn by the
-//! UI as vector overlays so it stays crisp at any zoom.
+//! The renderer draws document content (paper, page items, parent items, composed text,
+//! placed images). Optional frame edges are composited with their items so foreground objects
+//! occlude them. Guides, ports and selection are independent UI overlays.
 //!
 //! Callers pass a list of spreads with their placement on a shared canvas and a canvas → pixel
 //! view transform, so the UI can render exactly its viewport with every visible spread.
@@ -118,6 +118,8 @@ pub struct RenderOptions {
     pub background: Option<[u8; 4]>,
     /// Fill pages with paper colour.
     pub paper: bool,
+    /// Optional non-printing frame edges, composited in item stacking order (screen only).
+    pub frame_edges: Option<FrameEdges>,
     /// Skip non-printing items and layers (Preview mode, export).
     pub printing_only: bool,
     /// Items not to draw (live drag previews).
@@ -156,6 +158,15 @@ pub struct RenderOptions {
     pub blend_space_view: bool,
 }
 
+/// Frame-edge display settings, independent of the frontend toolkit.
+#[derive(Clone, Copy, Debug)]
+pub struct FrameEdges {
+    /// Device pixels per logical screen point (tag outlines and parent dashes).
+    pub scale: f64,
+    /// Use XML tag colors for tagged frames.
+    pub tagged: bool,
+}
+
 /// View › Display Performance: how placed graphics and effects are drawn on screen.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -174,6 +185,7 @@ impl Default for RenderOptions {
         Self {
             background: None,
             paper: true,
+            frame_edges: None,
             printing_only: false,
             hidden: vec![],
             greek_below_px: 0.0,
@@ -466,6 +478,7 @@ impl Renderer {
             if layered {
                 ctx.pop_layer();
             }
+            self.draw_frame_edges(ctx, f, it, &bp, xf, page);
             return;
         }
         if !it.children().is_empty() {
@@ -525,6 +538,52 @@ impl Renderer {
         }
         if layered {
             ctx.pop_layer();
+        }
+        self.draw_frame_edges(ctx, f, it, &bp, xf, page);
+    }
+
+    fn draw_frame_edges(&self, ctx: &mut RenderContext, f: &Frame, it: &Item, bp: &BezPath, xf: Affine, page: Option<usize>) {
+        let Some(edges) = f.opts.frame_edges.filter(|_| !f.opts.printing_only) else { return };
+        if !edges.scale.is_finite()
+            || edges.scale <= 0.0
+            || !(2.5 * edges.scale).is_finite()
+            || it.shape == designcraft_doc::Shape::Group
+            || f.doc.layer(it.layer).is_some_and(|l| !l.visible)
+        {
+            return;
+        }
+        let rgb = f.doc.layer(it.layer).map_or([173, 216, 230], |l| l.color);
+        let mut path = bp.clone();
+        path.apply_affine(f.view * xf);
+        // Stroke in device space: item transforms and zoom must not scale a hairline.
+        ctx.set_transform(Affine::IDENTITY);
+        ctx.set_paint(peniko::Color::from_rgba8(rgb[0], rgb[1], rgb[2], if page.is_some() { 204 } else { 191 }));
+        let mut stroke = kurbo::Stroke::new(1.0);
+        if page.is_some() {
+            stroke = stroke.with_dashes(0.0, [2.0 * edges.scale, 2.0 * edges.scale]);
+        }
+        ctx.set_stroke(stroke);
+        if page.is_some() || it.stroke.is_none() || matches!(it.content, Content::Text(_) | Content::Graphic(_)) {
+            ctx.stroke_path(&path);
+        }
+        if page.is_none() && it.object_style == designcraft_doc::BASIC_GRAPHICS_FRAME && matches!(it.content, Content::Unassigned) {
+            let r = it.inner_bounds();
+            let m = f.view * xf;
+            let mut cross = BezPath::new();
+            cross.move_to(m * designcraft_geom::Point::new(r.x0, r.y0));
+            cross.line_to(m * designcraft_geom::Point::new(r.x1, r.y1));
+            cross.move_to(m * designcraft_geom::Point::new(r.x1, r.y0));
+            cross.line_to(m * designcraft_geom::Point::new(r.x0, r.y1));
+            ctx.stroke_path(&cross);
+        }
+        if edges.tagged
+            && page.is_none()
+            && !it.xml_tag.is_empty()
+            && let Some(tag) = f.doc.xml.tags.iter().find(|tag| tag.name == it.xml_tag)
+        {
+            ctx.set_paint(peniko::Color::from_rgba8(tag.color[0], tag.color[1], tag.color[2], 255));
+            ctx.set_stroke(kurbo::Stroke::new(2.5 * edges.scale));
+            ctx.stroke_path(&path);
         }
     }
 
@@ -1218,6 +1277,64 @@ mod tests {
         proof_view(&mut img, &ProofSetup { target: ProofTarget::WorkingCmyk, ..Default::default() });
         assert_eq!(&img.pixels[..4], &[0, 0, 0, 0]);
         assert!(img.pixels[4] <= 128 && img.pixels[7] == 128);
+    }
+
+    #[test]
+    fn frame_edges_follow_stacking_opacity_and_groups_without_entering_exports() {
+        for grouped in [false, true] {
+            for other_layer in [false, true] {
+                let mut d = Document::new(&NewDocument::default());
+                let lid = d.default_layer();
+                d.layer_mut(lid).unwrap().color = [0, 255, 0];
+                let (lower, _) = d.add_text_frame(SpreadRef::Doc(0), Rect::new(72.0, 72.0, 272.0, 272.0), lid, "", ParaFormat::default()).unwrap();
+                let top_layer = if other_layer {
+                    let mut layer = d.layer(lid).unwrap().clone();
+                    layer.id = designcraft_doc::LayerId(d.alloc());
+                    layer.color = [255, 0, 0];
+                    let id = layer.id;
+                    d.layers.insert(0, layer);
+                    id
+                } else {
+                    lid
+                };
+                let cover = designcraft_doc::ItemId(d.alloc());
+                let mut item = Item::new(
+                    cover,
+                    top_layer,
+                    designcraft_doc::Shape::Rectangle,
+                    designcraft_geom::shapes::rectangle(Rect::new(150.0, 100.0, 330.0, 330.0)),
+                );
+                item.fill = Fill::swatch("C=0 M=100 Y=0 K=0");
+                let top = if grouped {
+                    let id = designcraft_doc::ItemId(d.alloc());
+                    let mut group = Item::new(id, top_layer, designcraft_doc::Shape::Group, item.path.clone());
+                    group.content = Content::Group { items: vec![Arc::new(item)] };
+                    d.insert_item(SpreadRef::Doc(0), group, None).unwrap();
+                    id
+                } else {
+                    d.insert_item(SpreadRef::Doc(0), item, None).unwrap();
+                    cover
+                };
+                let opts = RenderOptions { frame_edges: Some(FrameEdges { scale: 1.0, tagged: false }), ..Default::default() };
+                let cache = Cache::new();
+                let mut r = Renderer::new();
+                r.threads = 0;
+                let plain = r.render_page(&d, &cache, 0, 1.0, false, &RenderOptions::default()).unwrap();
+                let edges = r.render_page(&d, &cache, 0, 1.0, false, &opts).unwrap();
+                for (x, y) in [(272, 200), (200, 272)] {
+                    assert_eq!(edges.pixel(x, y), plain.pixel(x, y), "a foreground opaque object must cover the lower frame's edge");
+                }
+                assert!(edges.pixel(72, 150)[0] + 30 < plain.pixel(72, 150)[0], "the uncovered edge must remain visible");
+                d.item_mut(top).unwrap().opacity = 0.5;
+                let plain = r.render_page(&d, &cache, 0, 1.0, false, &RenderOptions::default()).unwrap();
+                let translucent = r.render_page(&d, &cache, 0, 1.0, false, &opts).unwrap();
+                assert_ne!(translucent.pixel(272, 200), plain.pixel(272, 200), "translucent objects must allow the edge beneath to show through");
+                let export = r.render_page(&d, &cache, 0, 1.0, false, &RenderOptions { printing_only: true, ..opts }).unwrap();
+                let clean = r.render_page(&d, &cache, 0, 1.0, false, &RenderOptions { printing_only: true, ..Default::default() }).unwrap();
+                assert_eq!(export.pixels, clean.pixels, "screen frame edges must never enter printed/exported content");
+                let _ = lower;
+            }
+        }
     }
 
     #[test]

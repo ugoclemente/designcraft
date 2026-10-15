@@ -2,7 +2,7 @@
 
 **Stage: pre-alpha** · next: alpha, ~0% and ~15–25 h away; beta ~28 points and ~420–750 h beyond that (the core-workflow gate, not the percentage: ready for real work is already ~47%)
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (text editing and image-content selection by double-click on Windows) · **Target:** Adobe InDesign 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (frame-edge occlusion and independent background guides/grids) · **Target:** Adobe InDesign 2026
 
 DesignCraft aims at full Adobe InDesign parity, and to be better: faster, open (documented JSON
 format + IDML), scriptable by agents (MCP), and available on the web.
@@ -128,6 +128,12 @@ list) · [roadmap.md](docs/roadmap.md) (milestones, plan) · [parity-checklist.m
 ## Progress log
 
 Newest first.
+
+- **2026-10-14 (frame-edge occlusion)** · Unselected frame edges now composite with their document items, respecting stacking order, layers, clipping and opacity. Selected outlines and handles remain foreground UI feedback. Renderer and UI pixel regressions cover opaque overlaps, translucent covers, groups, layers, reordering, partial repaints, edge visibility toggles and export exclusion. No readiness percentage change.
+
+- **2026-10-14 (guides in back)** · Preferences › Guides & Pasteboard gains Guides in Back (Italian: Guide sotto), off by default and persisted in application preferences. Margins, column boundaries and ruler guides can draw behind document content independently of Grids in Back, reusing the background composition and cache mode. Pixel tests cover all four combinations; Italian checkbox and preference persistence regressions passed. No readiness percentage change.
+
+- **2026-10-14 (grids in back)** · The existing Preferences › Grids option now controls baseline-grid compositing: paper, grid, then document content, with guides and selection above. Transparent content rendering reuses the renderer's paper option; the texture cache and partial repaints account for the mode. Pixel, Italian-dialog and document save/undo regressions passed. No readiness percentage change.
 
 - **2026-10-12 (image-content correction)** · The first double-click implementation set content selection but kept frame handles and movement. Reproduced the user's Windows dragging failure; selected graphic bounds now drive the orange handles, and move/resize/rotate preserve the crop frame. Grouped content uses existing hit testing with bounded descent. Regression coverage includes real mouse dragging, transformed containers, undo and unaffected text/empty-frame movement. No readiness percentage change.
 

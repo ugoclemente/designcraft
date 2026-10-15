@@ -403,8 +403,8 @@ impl Default for View {
 /// What the canvas texture currently shows.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Shown {
-    /// (doc uid, doc pointer, revision, preview).
-    pub doc: (u64, u64, u64, bool),
+    /// (doc uid, doc pointer, revision, preview, transparent backdrop, frame-edge flags).
+    pub doc: (u64, u64, u64, bool, bool, u8),
     /// Canvas point at the texture's top-left, zoom, and texture size in screen points.
     pub origin: Point,
     pub zoom: f64,

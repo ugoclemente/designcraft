@@ -48,7 +48,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Preferences",
             [],
             None,
-            "{showHiddenCharacters?, typographersQuotes?, doubleClickTextEdit?, polygonSides?, starInset?, scaleStrokes?, dimensionsIncludeStroke?, transformationsAreTotals?, absolutePageNumbers?, highlightHj?, highlightKeeps?, highlightCustomTracking?, highlightSubstitutedFonts?, richBlackOutput?, favoriteFonts?: [family], showFontNamesInEnglish?} → all application preferences",
+            "{showHiddenCharacters?, typographersQuotes?, doubleClickTextEdit?, guidesInBack?, polygonSides?, starInset?, scaleStrokes?, dimensionsIncludeStroke?, transformationsAreTotals?, absolutePageNumbers?, highlightHj?, highlightKeeps?, highlightCustomTracking?, highlightSubstitutedFonts?, richBlackOutput?, favoriteFonts?: [family], showFontNamesInEnglish?} → all application preferences",
             super::always,
             |s, p| {
                 let cur = serde_json::to_value(&s.prefs).map_err(|e| bad("prefs.set", e.to_string()))?;
@@ -137,6 +137,35 @@ mod tests {
         assert!(s.execute("document.preferences", &json!({"pageWidth": 100})).is_err(), "Document Setup's, not Preferences'");
         s.execute("edit.undo", &json!({})).unwrap();
         assert_eq!(s.doc().unwrap().doc.settings.horizontal_units, designcraft_geom::Unit::Picas);
+    }
+
+    #[test]
+    fn guides_in_back_defaults_off_and_survives_saved_preferences() {
+        let old: crate::Prefs = serde_json::from_str("{}").unwrap();
+        assert!(!old.guides_in_back);
+        let mut s = Session::new();
+        s.execute("prefs.set", &json!({"guidesInBack": true})).unwrap();
+        assert!(s.prefs.guides_in_back);
+        let saved = serde_json::to_vec(&s.prefs).unwrap();
+        let loaded: crate::Prefs = serde_json::from_slice(&saved).unwrap();
+        assert!(loaded.guides_in_back);
+        assert!(s.execute("prefs.set", &json!({"guidesInBack": "true"})).is_err());
+        assert!(s.prefs.guides_in_back);
+    }
+
+    #[test]
+    fn grids_in_back_survives_document_save_and_undo() {
+        let mut s = Session::new();
+        s.execute("file.new", &json!({})).unwrap();
+        for in_back in [false, true] {
+            s.execute("document.preferences", &json!({"grid": {"inBack": in_back}})).unwrap();
+            let saved = s.execute("file.serialize", &json!({})).unwrap();
+            s.execute("file.openBytes", &json!({"name": "grid.designcraft", "base64": saved["base64"]})).unwrap();
+            assert_eq!(s.execute("document.preferences", &json!({})).unwrap()["grid"]["inBack"], in_back);
+            s.execute("document.preferences", &json!({"grid": {"inBack": !in_back}})).unwrap();
+            s.execute("edit.undo", &json!({})).unwrap();
+            assert_eq!(s.doc().unwrap().doc.settings.grid.in_back, in_back);
+        }
     }
 
     #[test]

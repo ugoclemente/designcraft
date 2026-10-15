@@ -154,6 +154,8 @@ pub struct Prefs {
     pub typographers_quotes: bool,
     /// Preferences › Type: Selection-tool double-clicks enter text editing.
     pub double_click_text_edit: bool,
+    /// Preferences › Guides & Pasteboard: margins, columns and ruler guides behind content.
+    pub guides_in_back: bool,
     /// Polygon Settings (double-click the Polygon tool): number of sides, star inset (0–1).
     pub polygon_sides: u32,
     pub star_inset: f64,
@@ -224,6 +226,7 @@ impl Default for Prefs {
             show_hidden_characters: false,
             typographers_quotes: true,
             double_click_text_edit: true,
+            guides_in_back: false,
             polygon_sides: 6,
             star_inset: 0.0,
             scale_strokes: true,

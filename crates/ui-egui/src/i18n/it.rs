@@ -1336,6 +1336,7 @@ pub(super) const TABLE: &[(&str, &str)] = &[
     ("Enable Autocorrect", "Attiva correzione automatica"),
     ("Enable Dynamic Spelling (underline misspelled words)", "Attiva controllo ortografico dinamico (sottolinea le parole errate)"),
     ("Grids in Back", "Griglie sullo sfondo"),
+    ("Guides in Back", "Guide sotto"),
     ("H&J Violations", "Violazioni di sillabazione e giustificazione"),
     ("Include Bleed", "Includi pagina al vivo"),
     ("Include Stroke Weight", "Includi spessore traccia"),

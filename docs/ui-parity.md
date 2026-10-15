@@ -1,6 +1,6 @@
 # UI and interaction parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (text-frame double-click editing verified on Windows) · **Target:** Adobe InDesign 2026 (21.6, Medium Dark, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (frame-edge occlusion and independent background guides/grids) · **Target:** Adobe InDesign 2026 (21.6, Medium Dark, macOS)
 
 Tools, handles, snapping, nudging, modifiers, shortcuts, panels, menus, context menus and feel,
 against InDesign 2026. The look was measured from the running app
@@ -29,10 +29,13 @@ basics of editing fail for too many users on Windows and Linux.
 | Chrome: app bar, Control panel, Tools panel, dock, doc tabs, status bar | Medium Dark, measured sizes | measured look | ✓ | 11-observed-ui.md |
 | Properties panel and Contextual Task Bar | per selection | ✓, task bar movable (#143) | ✓ | |
 | Selection tool: click, marquee, move, Alt-duplicate, resize handles, rotate from corners | ✓ | ✓ | ✓ | |
+| Unselected frame edges obey object stacking; selected outline stays visible | ✓ | ✓, item-composited screen edges | ✓ | opaque content hides only the covered edge segments; renderer/UI regressions; [verification](frame-edge-occlusion.md) |
 | Direct Selection, Pen family, Pencil, Scissors | ✓ | ✓ | ~ | moving reference point "0" fails (#337) |
 | Live corners (yellow handle) | ✓ | ✓ | ~ | not working for some users (#186) |
 | Content grabber, frame fitting by double-click | ✓ | ✓ | ✓ | |
 | Smart guides, snapping to guides/grid/baseline | ✓ | ✓ (2,049-line `snap.rs`) | ~ | vertical smart spacing between two rectangles (#188) |
+| Preferences › Grids › Grids in Back | ✓ | ✓, baseline grid behind document content when enabled | ✓ | live toggling, partial repaints, Italian checkbox and document persistence regressions; [verification](grids-in-back.md) |
+| Preferences › Guides & Pasteboard › Guides in Back | ✓ | ✓, margins, columns and ruler guides behind content | ✓ | Italian Guide sotto; persistent application option; independent of grid order; [verification](guides-in-back.md) |
 | Nudging with arrows, Shift ×10 | ✓ | ✓ | ✓ | |
 | Gridify while drawing, Gap tool, Live Distribute | ✓ | ✓ | ✓ | |
 | Type tool: caret, selection, double/triple click, drag-and-drop text | ✓ | ✓ | ~ | formatting at a caret discarded (#289); text editing complaints (#23, #174) |
